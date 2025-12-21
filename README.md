@@ -30,27 +30,6 @@ Experimental, pure Rust runtime for Spine 4.3 (unofficial).
 - `spine2d-wgpu`: wgpu renderer integration built on top of `spine2d`.
 - `spine2d-web`: Trunk + wgpu web demo/viewer (`wasm32-unknown-unknown`).
 
-## Upstream reference (commit hashes)
-
-This project continuously compares behaviour and render output to the official `spine-runtimes` repository.
-
-Baseline policy:
-- Target runtime line: **Spine 4.3** (`spine-runtimes` **`4.3-beta`** branch).
-- To avoid drift, we pin an exact upstream commit for examples + oracle reference.
-
-Current reference (example exports used by smoke tests and demos):
-- See `assets/spine-runtimes/SOURCE.txt` (Commit field).
-
-Notes:
-- Upstream sources/assets are not committed to this repository.
-- The oracle scripts compile a tiny C++ helper against the upstream `spine-cpp` runtime from a local `spine-runtimes` checkout (set `SPINE2D_UPSTREAM_RUNTIMES_DIR=/path/to/spine-runtimes`).
-- For consistent diffs, use the same upstream commit as `assets/spine-runtimes/SOURCE.txt`.
-
-## Spine license notice
-
-Spine is developed by Esoteric Software. This project is not affiliated with them.
-Using Spine runtimes and Spine data generally requires a Spine Editor license.
-See the official license terms: https://esotericsoftware.com/spine-editor-license
 
 ## Assets / redistribution
 
@@ -59,9 +38,6 @@ See the official license terms: https://esotericsoftware.com/spine-editor-licens
   Make sure you comply with the Spine license terms for your usage and redistribution.
   - Import examples locally: `python3 ./scripts/prepare_spine_runtimes_web_assets.py --scope tests`
 
-## License
-
-Dual-licensed under `MIT OR Apache-2.0`. See `LICENSE-MIT` and `LICENSE-APACHE`.
 
 ## Optional upstream smoke tests (local data)
 
@@ -73,7 +49,9 @@ These files are not committed here by default.
 - Run tests: `cargo test -p spine2d --features json,upstream-smoke`
 - Run tests (including `.skel` parsing): `cargo test -p spine2d --features json,binary,upstream-smoke`
 
-## wgpu demo (native)
+## Demo
+
+### wgpu demo (native)
 
 - Minimal UV test window: `cargo run -p spine2d-wgpu --example basic --features json`
 - Render upstream example skeletons (requires importing `--mode export`):  
@@ -82,7 +60,7 @@ These files are not committed here by default.
   - Note: the demo resets the skeleton to setup pose each frame before `AnimationState::apply` to avoid accumulated constraint drift.
   - Tip: the demo has an egui top bar to switch example/animation/skin and adjust speed/margin.
 
-## Web demo (wasm + Trunk)
+### Web demo (wasm + Trunk)
 
 - Install target: `rustup target add wasm32-unknown-unknown`
 - Install Trunk: `cargo install trunk --locked`
@@ -92,21 +70,20 @@ These files are not committed here by default.
   - Note: the demo auto-fits the initial bounds to the viewport (camera fit is computed once from the first frame).
   - Controls: Play/Pause, Restart, Fit, Speed, Animation, Skin.
 
-### Using official example exports locally (not committed)
+### Using official example exports locally
 
 - Prepare assets + web manifest: `python3 ./scripts/prepare_spine_runtimes_web_assets.py --scope tests`
 - Then run: `cd spine2d-web && trunk serve`
   - The demo will auto-detect `assets/spine-runtimes/web_manifest.json` and populate the Example dropdown.
   - Optional URL params: `?example=spineboy&anim=run`
 
-## Status (work in progress)
+## License
 
-- Parity snapshot (pinned upstream commit + current test status): `docs/parity-4.3-beta.md`.
-- Behaviour baseline: `AnimationState` event semantics aligned to upstream C# tests (`AnimationStateTests.cs`).
-- Pose: bones + world transforms + bone timelines (rotate/translate/scale/shear) with linear/stepped/bezier curves (Bezier evaluated in Spine's (time,value) space; multi-value timelines have per-value curves).
-- Data: JSON parsing for `slots/skins` (region + mesh, weighted/unweighted) and `attachments.deform` timelines.
-- Output: renderer-agnostic `DrawList` + `.atlas` UV mapping; mesh output respects slot deform.
-- Animation: slot timelines (`slots.*.attachment`, `slots.*.color`, `drawOrder`) are implemented.
-- Constraints: IK (1/2 bone), transform constraints, and path constraints with their animation timelines are implemented and unit-tested.
-- Oracle: local pose-dump comparison against the official C++ runtime (tools live under `spine2d/examples/*dump*.rs` + `scripts/*oracle*`).
-  - Note: some scripts are named `*cpp_lite*` for historical reasons; on `4.3-beta` the oracle builds against upstream `spine-c` + `spine-cpp`.
+Dual-licensed under `MIT OR Apache-2.0`. See `LICENSE-MIT` and `LICENSE-APACHE`.
+
+
+## Spine license notice
+
+Spine is developed by Esoteric Software. This project is not affiliated with them.
+Using Spine runtimes and Spine data generally requires a Spine Editor license.
+See the official license terms: https://esotericsoftware.com/spine-editor-license
