@@ -82,9 +82,10 @@ jobs:
 
       - name: Cargo package (spine2d)
         run: cargo package -p spine2d
-
-      - name: Cargo package (spine2d-wgpu)
-        run: cargo package -p spine2d-wgpu
+      # NOTE: We intentionally do not run `cargo package -p spine2d-wgpu` here.
+      # For workspace crates, packaging simulates crates.io publishing and resolves
+      # `spine2d = { version = "^X.Y.Z" }` from the crates.io index, which will fail
+      # before `spine2d` is published for this tag.
 
   publish:
     name: Publish to crates.io
