@@ -38,7 +38,7 @@ fn build_draw_list_region_attachment_quad() {
     assert_eq!(draw_list.indices.len(), 6);
     assert_eq!(draw_list.draws[0].texture_path, "head.png");
     assert_eq!(draw_list.draws[0].blend, crate::BlendMode::Normal);
-    assert_eq!(draw_list.draws[0].premultiplied_alpha, false);
+    assert!(!draw_list.draws[0].premultiplied_alpha);
 
     // Vertex order matches spine-cpp `RegionAttachment.computeWorldVertices`: BR, BL, UL, UR.
     let br = draw_list.vertices[0].position;
@@ -85,7 +85,7 @@ fn build_draw_list_batches_draws_by_texture_path() {
     assert_eq!(draw_list.draws.len(), 1);
     assert_eq!(draw_list.draws[0].texture_path, "page.png");
     assert_eq!(draw_list.draws[0].blend, crate::BlendMode::Normal);
-    assert_eq!(draw_list.draws[0].premultiplied_alpha, false);
+    assert!(!draw_list.draws[0].premultiplied_alpha);
     assert_eq!(draw_list.indices.len(), 12);
     assert_eq!(draw_list.draws[0].first_index, 0);
     assert_eq!(draw_list.draws[0].index_count, 12);
@@ -130,7 +130,7 @@ head
 
     let draw_list = build_draw_list_with_atlas(&skeleton, &atlas);
     assert_eq!(draw_list.draws[0].texture_path, "page.png");
-    assert_eq!(draw_list.draws[0].premultiplied_alpha, false);
+    assert!(!draw_list.draws[0].premultiplied_alpha);
 
     let uv0 = draw_list.vertices[0].uv;
     let uv2 = draw_list.vertices[2].uv;
@@ -180,7 +180,7 @@ head
 
     let draw_list = build_draw_list_with_atlas(&skeleton, &atlas);
     assert_eq!(draw_list.draws[0].texture_path, "page.png");
-    assert_eq!(draw_list.draws[0].premultiplied_alpha, false);
+    assert!(!draw_list.draws[0].premultiplied_alpha);
 
     let u = 16.0 / 64.0;
     let v = 32.0 / 64.0;
@@ -240,7 +240,7 @@ fn build_draw_list_mesh_attachment_outputs_vertices_and_indices() {
     assert_eq!(draw_list.indices, vec![0, 1, 2, 2, 3, 0]);
     assert_eq!(draw_list.draws.len(), 1);
     assert_eq!(draw_list.draws[0].blend, crate::BlendMode::Normal);
-    assert_eq!(draw_list.draws[0].premultiplied_alpha, false);
+    assert!(!draw_list.draws[0].premultiplied_alpha);
 }
 
 #[test]
@@ -288,7 +288,7 @@ mesh0
 
     let draw_list = build_draw_list_with_atlas(&skeleton, &atlas);
     assert_eq!(draw_list.draws[0].texture_path, "page.png");
-    assert_eq!(draw_list.draws[0].premultiplied_alpha, false);
+    assert!(!draw_list.draws[0].premultiplied_alpha);
     let uv0 = draw_list.vertices[0].uv;
     let uv2 = draw_list.vertices[2].uv;
     assert_approx(uv0[0], 16.0 / 64.0);
@@ -391,7 +391,7 @@ fn build_draw_list_skips_attachments_on_inactive_bones() {
     // `weapon` is skinRequired and no skin is set, so the bone is inactive and spine-cpp skips
     // rendering attachments in this slot.
     assert_eq!(skeleton.bones.len(), 2);
-    assert_eq!(skeleton.bones[1].active, false);
+    assert!(!skeleton.bones[1].active);
 
     let draw_list = build_draw_list(&skeleton);
     assert_eq!(draw_list.draws.len(), 0);
@@ -632,6 +632,73 @@ fn build_draw_list_clipping_slot_inactive_does_not_start_clipping() {
 }
 
 #[test]
+fn build_draw_list_clipping_end_slot_bone_inactive_still_ends_clipping() {
+    let data = SkeletonData::from_json_str(
+        r#"
+{
+  "skeleton": { "spine": "4.3.00" },
+  "bones": [
+    { "name": "root" },
+    { "name": "skinRequired", "parent": "root", "skin": true }
+  ],
+  "slots": [
+    { "name": "clip", "bone": "root", "attachment": "clipper" },
+    { "name": "a", "bone": "skinRequired", "attachment": "a" },
+    { "name": "b", "bone": "root", "attachment": "b" }
+  ],
+  "skins": {
+    "default": {
+      "clip": {
+        "clipper": {
+          "type": "clipping",
+          "end": "a",
+          "vertexCount": 3,
+          "vertices": [ 0,0, 0.5,0, 0,0.5 ]
+        }
+      },
+      "a": {
+        "a": { "type": "region", "path": "a.png", "width": 2, "height": 2 }
+      },
+      "b": {
+        "b": { "type": "region", "path": "b.png", "width": 2, "height": 2 }
+      }
+    }
+  },
+  "animations": {}
+}
+"#,
+    )
+    .unwrap();
+
+    let mut skeleton = crate::Skeleton::new(data);
+    skeleton.set_to_setup_pose();
+    skeleton.update_world_transform();
+
+    // `skinRequired` is inactive (no skin set), but it is the clip end slot. Clipping must still
+    // end there so subsequent slots are not clipped.
+    assert_eq!(skeleton.bones.len(), 2);
+    assert!(!skeleton.bones[1].active);
+
+    let draw_list = build_draw_list(&skeleton);
+    assert_eq!(draw_list.draws.len(), 1);
+
+    let draw_b = draw_list.draws.last().unwrap();
+    assert_eq!(draw_b.texture_path, "b.png");
+    assert_eq!(draw_b.index_count, 6);
+
+    assert_eq!(draw_list.vertices.len(), 4);
+    let v = &draw_list.vertices;
+    assert_approx(v[0].position[0], 1.0);
+    assert_approx(v[0].position[1], -1.0);
+    assert_approx(v[1].position[0], -1.0);
+    assert_approx(v[1].position[1], -1.0);
+    assert_approx(v[2].position[0], -1.0);
+    assert_approx(v[2].position[1], 1.0);
+    assert_approx(v[3].position[0], 1.0);
+    assert_approx(v[3].position[1], 1.0);
+}
+
+#[test]
 fn build_draw_list_splits_draws_by_blend_mode() {
     let data = SkeletonData::from_json_str(
         r#"
@@ -707,7 +774,7 @@ head
 
     let draw_list = build_draw_list_with_atlas(&skeleton, &atlas);
     assert_eq!(draw_list.draws.len(), 1);
-    assert_eq!(draw_list.draws[0].premultiplied_alpha, true);
+    assert!(draw_list.draws[0].premultiplied_alpha);
 
     let c = draw_list.vertices[0].color;
     assert_approx(c[3], 128.0 / 255.0);
@@ -1162,7 +1229,7 @@ fn build_draw_list_clipping_attachment_clips_region_geometry() {
     assert_eq!(draw_list.draws.len(), 1);
     assert_eq!(draw_list.draws[0].texture_path, "page.png");
     assert_eq!(draw_list.draws[0].blend, crate::BlendMode::Normal);
-    assert_eq!(draw_list.draws[0].premultiplied_alpha, false);
+    assert!(!draw_list.draws[0].premultiplied_alpha);
     assert_eq!(draw_list.draws[0].first_index, 0);
     assert_eq!(draw_list.draws[0].index_count, draw_list.indices.len());
     assert_eq!(draw_list.indices.len() % 3, 0);

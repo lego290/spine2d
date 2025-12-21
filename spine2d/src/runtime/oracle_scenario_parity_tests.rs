@@ -1,6 +1,7 @@
 use crate::runtime::{AnimationState, AnimationStateData};
 use crate::{AttachmentData, Skeleton, SkeletonData};
 use serde::Deserialize;
+use serde::de::Deserializer;
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -201,8 +202,18 @@ struct PhysicsConstraintDump {
 #[derive(Clone, Debug, Deserialize)]
 struct DebugDump {
     slot: String,
-    #[serde(rename = "worldVertices")]
+    #[serde(
+        rename = "worldVertices",
+        deserialize_with = "deserialize_world_vertices_or_null"
+    )]
     world_vertices: Vec<f32>,
+}
+
+fn deserialize_world_vertices_or_null<'de, D>(deserializer: D) -> Result<Vec<f32>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(Option::<Vec<f32>>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -432,13 +443,14 @@ fn dump_pose(skeleton: &Skeleton, time: f32, debug_slot: Option<&str>) -> PoseDu
         })
         .collect();
 
-    let debug = debug_slot.and_then(|slot_name| {
+    let debug = debug_slot.map(|slot_name| {
         let i = slot_index(&skeleton.data, slot_name);
-        let world_vertices = skeleton.slot_vertex_attachment_world_vertices(i)?;
-        Some(DebugDump {
+        DebugDump {
             slot: slot_name.to_string(),
-            world_vertices,
-        })
+            world_vertices: skeleton
+                .slot_vertex_attachment_world_vertices(i)
+                .unwrap_or_default(),
+        }
     });
 
     PoseDump {
@@ -942,6 +954,84 @@ fn oracle_diamond_idle_rotating_t0_5_matches_cpp() {
 }
 
 #[test]
+fn oracle_diamond_idle_rotating_plus_rotation_add_t0_5_matches_cpp() {
+    let data = load_data(&example_json_path("diamond/export/diamond-pro.json"));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    state
+        .set_animation(0, "idle-rotating", true)
+        .expect("set animation idle-rotating");
+    let entry = state
+        .set_animation(1, "rotation", true)
+        .expect("set animation rotation");
+    entry.set_mix_blend(&mut state, crate::MixBlend::Add);
+
+    let dt = 0.5;
+    step(&mut state, &mut skeleton, dt);
+
+    let rust = dump_pose(&skeleton, dt, None);
+    let cpp = read_pose(&golden_path(
+        "diamond_idle_rotating_plus_rotation_add_t0_5.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+fn oracle_diamond_idle_rotating_plus_idle_still_add_t0_5_matches_cpp() {
+    let data = load_data(&example_json_path("diamond/export/diamond-pro.json"));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    state
+        .set_animation(0, "idle-rotating", true)
+        .expect("set animation idle-rotating");
+    let entry = state
+        .set_animation(1, "idle-still", true)
+        .expect("set animation idle-still");
+    entry.set_mix_blend(&mut state, crate::MixBlend::Add);
+
+    let dt = 0.5;
+    step(&mut state, &mut skeleton, dt);
+
+    let rust = dump_pose(&skeleton, dt, None);
+    let cpp = read_pose(&golden_path(
+        "diamond_idle_rotating_plus_idle_still_add_t0_5.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+fn oracle_diamond_idle_rotating_plus_idle_still_add_to_empty_mix0_2_t0_1_matches_cpp() {
+    let data = load_data(&example_json_path("diamond/export/diamond-pro.json"));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    state
+        .set_animation(0, "idle-rotating", true)
+        .expect("set animation idle-rotating");
+    let entry = state
+        .set_animation(1, "idle-still", true)
+        .expect("set animation idle-still");
+    entry.set_mix_blend(&mut state, crate::MixBlend::Add);
+    state
+        .set_empty_animation(1, 0.2)
+        .expect("set empty animation");
+
+    let dt = 0.1;
+    step(&mut state, &mut skeleton, dt);
+
+    let rust = dump_pose(&skeleton, dt, None);
+    let cpp = read_pose(&golden_path(
+        "diamond_idle_rotating_plus_idle_still_add_to_empty_mix0_2_t0_1.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
 #[cfg(all(feature = "binary", feature = "upstream-smoke"))]
 fn oracle_skel_diamond_idle_rotating_t0_5_matches_cpp() {
     let data = load_data(&example_json_path("diamond/export/diamond-pro.skel"));
@@ -958,6 +1048,87 @@ fn oracle_skel_diamond_idle_rotating_t0_5_matches_cpp() {
 
     let rust = dump_pose(&skeleton, dt, None);
     let cpp = read_pose(&golden_skel_path("diamond_idle_rotating_t0_5.json"));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_diamond_idle_rotating_plus_idle_still_add_t0_5_matches_cpp() {
+    let data = load_data(&example_json_path("diamond/export/diamond-pro.skel"));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    state
+        .set_animation(0, "idle-rotating", true)
+        .expect("set animation idle-rotating");
+    let entry = state
+        .set_animation(1, "idle-still", true)
+        .expect("set animation idle-still");
+    entry.set_mix_blend(&mut state, crate::MixBlend::Add);
+
+    let dt = 0.5;
+    step(&mut state, &mut skeleton, dt);
+
+    let rust = dump_pose(&skeleton, dt, None);
+    let cpp = read_pose(&golden_skel_path(
+        "diamond_idle_rotating_plus_idle_still_add_t0_5.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_diamond_idle_rotating_plus_idle_still_add_to_empty_mix0_2_t0_1_matches_cpp() {
+    let data = load_data(&example_json_path("diamond/export/diamond-pro.skel"));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    state
+        .set_animation(0, "idle-rotating", true)
+        .expect("set animation idle-rotating");
+    let entry = state
+        .set_animation(1, "idle-still", true)
+        .expect("set animation idle-still");
+    entry.set_mix_blend(&mut state, crate::MixBlend::Add);
+    state
+        .set_empty_animation(1, 0.2)
+        .expect("set empty animation");
+
+    let dt = 0.1;
+    step(&mut state, &mut skeleton, dt);
+
+    let rust = dump_pose(&skeleton, dt, None);
+    let cpp = read_pose(&golden_skel_path(
+        "diamond_idle_rotating_plus_idle_still_add_to_empty_mix0_2_t0_1.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_diamond_idle_rotating_plus_rotation_add_t0_5_matches_cpp() {
+    let data = load_data(&example_json_path("diamond/export/diamond-pro.skel"));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    state
+        .set_animation(0, "idle-rotating", true)
+        .expect("set animation idle-rotating");
+    let entry = state
+        .set_animation(1, "rotation", true)
+        .expect("set animation rotation");
+    entry.set_mix_blend(&mut state, crate::MixBlend::Add);
+
+    let dt = 0.5;
+    step(&mut state, &mut skeleton, dt);
+
+    let rust = dump_pose(&skeleton, dt, None);
+    let cpp = read_pose(&golden_skel_path(
+        "diamond_idle_rotating_plus_rotation_add_t0_5.json",
+    ));
     assert_pose_parity(&rust, &cpp, 1.0e-3);
 }
 
@@ -1051,6 +1222,67 @@ fn oracle_skel_mix_and_match_skin_switch_hat_aware_t0_1667_matches_cpp() {
     let rust = dump_pose(&skeleton, 0.1667, None);
     let cpp = read_pose(&golden_skel_path(
         "mix_and_match_skin_switch_hat_aware_t0_1667.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+fn oracle_mix_and_match_walk_plus_dress_up_add_t0_4_matches_cpp() {
+    let data = load_data(&example_json_path(
+        "mix-and-match/export/mix-and-match-pro.json",
+    ));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    skeleton
+        .set_skin(Some("full-skins/boy"))
+        .expect("set skin full-skins/boy");
+    step(&mut state, &mut skeleton, 0.0);
+
+    state.set_animation(0, "walk", true).expect("set walk");
+    step(&mut state, &mut skeleton, 0.1);
+
+    let dress_up = state
+        .set_animation(1, "dress-up", true)
+        .expect("set dress-up");
+    dress_up.set_mix_blend(&mut state, crate::MixBlend::Add);
+    step(&mut state, &mut skeleton, 0.3);
+
+    let rust = dump_pose(&skeleton, 0.4, None);
+    let cpp = read_pose(&golden_path(
+        "mix_and_match_walk_plus_dress_up_add_t0_4.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_mix_and_match_walk_plus_dress_up_add_t0_4_matches_cpp() {
+    let data = load_data(&example_json_path(
+        "mix-and-match/export/mix-and-match-pro.skel",
+    ));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    skeleton
+        .set_skin(Some("full-skins/boy"))
+        .expect("set skin full-skins/boy");
+    step(&mut state, &mut skeleton, 0.0);
+
+    state.set_animation(0, "walk", true).expect("set walk");
+    step(&mut state, &mut skeleton, 0.1);
+
+    let dress_up = state
+        .set_animation(1, "dress-up", true)
+        .expect("set dress-up");
+    dress_up.set_mix_blend(&mut state, crate::MixBlend::Add);
+    step(&mut state, &mut skeleton, 0.3);
+
+    let rust = dump_pose(&skeleton, 0.4, None);
+    let cpp = read_pose(&golden_skel_path(
+        "mix_and_match_walk_plus_dress_up_add_t0_4.json",
     ));
     assert_pose_parity(&rust, &cpp, 1.0e-3);
 }
@@ -1522,6 +1754,128 @@ fn oracle_owl_up_head_base_deform_jitter_dt_t0_55_matches_cpp() {
 
     let rust = dump_pose(&skeleton, 0.55, Some("head-base"));
     let cpp = read_pose(&golden_path("owl_up_head_base_deform_jitter_dt_t0_55.json"));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+fn oracle_owl_idle_physics_t0_5_matches_cpp() {
+    let data = load_data(&example_json_path("owl/export/owl-pro.json"));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "idle", true).expect("set idle");
+
+    let dt = 1.0 / 60.0;
+    for _ in 0..30 {
+        step_physics(&mut state, &mut skeleton, dt);
+    }
+
+    let rust = dump_pose(&skeleton, skeleton.time(), Some("head-base"));
+    let cpp = read_pose(&golden_path("owl_idle_physics_t0_5.json"));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+fn oracle_owl_idle_physics_jitter_dt_t1_0_matches_cpp() {
+    let data = load_data(&example_json_path("owl/export/owl-pro.json"));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "idle", true).expect("set idle");
+
+    for _ in 0..10 {
+        step_physics(&mut state, &mut skeleton, 0.008_333_334);
+    }
+    for _ in 0..10 {
+        step_physics(&mut state, &mut skeleton, 0.033_333_336);
+    }
+    for _ in 0..35 {
+        step_physics(&mut state, &mut skeleton, 0.016_666_668);
+    }
+
+    let rust = dump_pose(&skeleton, skeleton.time(), Some("head-base"));
+    let cpp = read_pose(&golden_path("owl_idle_physics_jitter_dt_t1_0.json"));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+fn oracle_owl_idle_physics_update_pose_update_t1_0_matches_cpp() {
+    let data = load_data(&example_json_path("owl/export/owl-pro.json"));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "idle", true).expect("set idle");
+
+    let dt = 1.0 / 60.0;
+    for _ in 0..30 {
+        step_with_physics(&mut state, &mut skeleton, dt, crate::Physics::Update);
+    }
+    for _ in 0..15 {
+        step_with_physics(&mut state, &mut skeleton, dt, crate::Physics::Pose);
+    }
+    for _ in 0..15 {
+        step_with_physics(&mut state, &mut skeleton, dt, crate::Physics::Update);
+    }
+
+    let rust = dump_pose(&skeleton, skeleton.time(), Some("head-base"));
+    let cpp = read_pose(&golden_path(
+        "owl_idle_physics_update_pose_update_t1_0.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+fn oracle_owl_idle_physics_update_reset_update_t1_0_matches_cpp() {
+    let data = load_data(&example_json_path("owl/export/owl-pro.json"));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "idle", true).expect("set idle");
+
+    let dt = 1.0 / 60.0;
+    for _ in 0..30 {
+        step_with_physics(&mut state, &mut skeleton, dt, crate::Physics::Update);
+    }
+    step_with_physics(&mut state, &mut skeleton, 0.0, crate::Physics::Reset);
+    for _ in 0..30 {
+        step_with_physics(&mut state, &mut skeleton, dt, crate::Physics::Update);
+    }
+
+    let rust = dump_pose(&skeleton, skeleton.time(), Some("head-base"));
+    let cpp = read_pose(&golden_path(
+        "owl_idle_physics_update_reset_update_t1_0.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+fn oracle_owl_up_plus_left_add_head_base_deform_physics_t0_55_matches_cpp() {
+    let data = load_data(&example_json_path("owl/export/owl-pro.json"));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "up", true).expect("set up");
+
+    let dt = 1.0 / 60.0;
+    for _ in 0..6 {
+        step_physics(&mut state, &mut skeleton, dt);
+    }
+
+    let left = state.set_animation(1, "left", true).expect("set left");
+    left.set_mix_blend(&mut state, crate::MixBlend::Add);
+    for _ in 0..27 {
+        step_physics(&mut state, &mut skeleton, dt);
+    }
+
+    let rust = dump_pose(&skeleton, skeleton.time(), Some("head-base"));
+    let cpp = read_pose(&golden_path(
+        "owl_up_plus_left_add_head_base_deform_physics_t0_55.json",
+    ));
     assert_pose_parity(&rust, &cpp, 1.0e-3);
 }
 
@@ -2081,6 +2435,133 @@ fn oracle_skel_owl_up_head_base_deform_jitter_dt_t0_55_matches_cpp() {
     let rust = dump_pose(&skeleton, 0.55, Some("head-base"));
     let cpp = read_pose(&golden_skel_path(
         "owl_up_head_base_deform_jitter_dt_t0_55.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_owl_idle_physics_t0_5_matches_cpp() {
+    let data = load_data(&example_json_path("owl/export/owl-pro.skel"));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "idle", true).expect("set idle");
+
+    let dt = 1.0 / 60.0;
+    for _ in 0..30 {
+        step_physics(&mut state, &mut skeleton, dt);
+    }
+
+    let rust = dump_pose(&skeleton, skeleton.time(), Some("head-base"));
+    let cpp = read_pose(&golden_skel_path("owl_idle_physics_t0_5.json"));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_owl_idle_physics_jitter_dt_t1_0_matches_cpp() {
+    let data = load_data(&example_json_path("owl/export/owl-pro.skel"));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "idle", true).expect("set idle");
+
+    for _ in 0..10 {
+        step_physics(&mut state, &mut skeleton, 0.008_333_334);
+    }
+    for _ in 0..10 {
+        step_physics(&mut state, &mut skeleton, 0.033_333_336);
+    }
+    for _ in 0..35 {
+        step_physics(&mut state, &mut skeleton, 0.016_666_668);
+    }
+
+    let rust = dump_pose(&skeleton, skeleton.time(), Some("head-base"));
+    let cpp = read_pose(&golden_skel_path("owl_idle_physics_jitter_dt_t1_0.json"));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_owl_idle_physics_update_pose_update_t1_0_matches_cpp() {
+    let data = load_data(&example_json_path("owl/export/owl-pro.skel"));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "idle", true).expect("set idle");
+
+    let dt = 1.0 / 60.0;
+    for _ in 0..30 {
+        step_with_physics(&mut state, &mut skeleton, dt, crate::Physics::Update);
+    }
+    for _ in 0..15 {
+        step_with_physics(&mut state, &mut skeleton, dt, crate::Physics::Pose);
+    }
+    for _ in 0..15 {
+        step_with_physics(&mut state, &mut skeleton, dt, crate::Physics::Update);
+    }
+
+    let rust = dump_pose(&skeleton, skeleton.time(), Some("head-base"));
+    let cpp = read_pose(&golden_skel_path(
+        "owl_idle_physics_update_pose_update_t1_0.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_owl_idle_physics_update_reset_update_t1_0_matches_cpp() {
+    let data = load_data(&example_json_path("owl/export/owl-pro.skel"));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "idle", true).expect("set idle");
+
+    let dt = 1.0 / 60.0;
+    for _ in 0..30 {
+        step_with_physics(&mut state, &mut skeleton, dt, crate::Physics::Update);
+    }
+    step_with_physics(&mut state, &mut skeleton, 0.0, crate::Physics::Reset);
+    for _ in 0..30 {
+        step_with_physics(&mut state, &mut skeleton, dt, crate::Physics::Update);
+    }
+
+    let rust = dump_pose(&skeleton, skeleton.time(), Some("head-base"));
+    let cpp = read_pose(&golden_skel_path(
+        "owl_idle_physics_update_reset_update_t1_0.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_owl_up_plus_left_add_head_base_deform_physics_t0_55_matches_cpp() {
+    let data = load_data(&example_json_path("owl/export/owl-pro.skel"));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "up", true).expect("set up");
+
+    let dt = 1.0 / 60.0;
+    for _ in 0..6 {
+        step_physics(&mut state, &mut skeleton, dt);
+    }
+
+    let left = state.set_animation(1, "left", true).expect("set left");
+    left.set_mix_blend(&mut state, crate::MixBlend::Add);
+    for _ in 0..27 {
+        step_physics(&mut state, &mut skeleton, dt);
+    }
+
+    let rust = dump_pose(&skeleton, skeleton.time(), Some("head-base"));
+    let cpp = read_pose(&golden_skel_path(
+        "owl_up_plus_left_add_head_base_deform_physics_t0_55.json",
     ));
     assert_pose_parity(&rust, &cpp, 1.0e-3);
 }
@@ -3179,6 +3660,114 @@ fn oracle_tank_drive_plus_shoot_add_to_empty_t0_35_matches_cpp() {
 }
 
 #[test]
+fn oracle_tank_drive_plus_shoot_add_to_empty_immediate_mix0_2_t0_1_matches_cpp() {
+    let data = load_data(&example_json_path("tank/export/tank-pro.json"));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "drive", true).expect("set drive");
+
+    let shoot = state.set_animation(1, "shoot", false).expect("set shoot");
+    shoot.set_mix_blend(&mut state, crate::MixBlend::Add);
+
+    // Critical edge case: immediately mix out before the Add entry is ever applied.
+    state
+        .set_empty_animation(1, 0.2)
+        .expect("set empty animation");
+
+    let dt = 0.1;
+    step(&mut state, &mut skeleton, dt);
+
+    let rust = dump_pose(&skeleton, dt, Some("smoke-glow"));
+    let cpp = read_pose(&golden_path(
+        "tank_drive_plus_shoot_add_to_empty_immediate_mix0_2_t0_1.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+fn oracle_tank_shoot_plus_drive_add_to_empty_immediate_mix0_2_t0_1_matches_cpp() {
+    let data = load_data(&example_json_path("tank/export/tank-pro.json"));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "shoot", false).expect("set shoot");
+
+    let drive = state.set_animation(1, "drive", true).expect("set drive");
+    drive.set_mix_blend(&mut state, crate::MixBlend::Add);
+
+    // Critical edge case: immediately mix out before the Add entry is ever applied.
+    state
+        .set_empty_animation(1, 0.2)
+        .expect("set empty animation");
+
+    let dt = 0.1;
+    step(&mut state, &mut skeleton, dt);
+
+    let rust = dump_pose(&skeleton, dt, None);
+    let cpp = read_pose(&golden_path(
+        "tank_shoot_plus_drive_add_to_empty_immediate_mix0_2_t0_1.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_tank_drive_plus_shoot_add_to_empty_immediate_mix0_2_t0_1_matches_cpp() {
+    let data = load_data(&example_json_path("tank/export/tank-pro.skel"));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "drive", true).expect("set drive");
+
+    let shoot = state.set_animation(1, "shoot", false).expect("set shoot");
+    shoot.set_mix_blend(&mut state, crate::MixBlend::Add);
+
+    state
+        .set_empty_animation(1, 0.2)
+        .expect("set empty animation");
+
+    let dt = 0.1;
+    step(&mut state, &mut skeleton, dt);
+
+    let rust = dump_pose(&skeleton, dt, Some("smoke-glow"));
+    let cpp = read_pose(&golden_skel_path(
+        "tank_drive_plus_shoot_add_to_empty_immediate_mix0_2_t0_1.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_tank_shoot_plus_drive_add_to_empty_immediate_mix0_2_t0_1_matches_cpp() {
+    let data = load_data(&example_json_path("tank/export/tank-pro.skel"));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "shoot", false).expect("set shoot");
+
+    let drive = state.set_animation(1, "drive", true).expect("set drive");
+    drive.set_mix_blend(&mut state, crate::MixBlend::Add);
+
+    state
+        .set_empty_animation(1, 0.2)
+        .expect("set empty animation");
+
+    let dt = 0.1;
+    step(&mut state, &mut skeleton, dt);
+
+    let rust = dump_pose(&skeleton, dt, None);
+    let cpp = read_pose(&golden_skel_path(
+        "tank_shoot_plus_drive_add_to_empty_immediate_mix0_2_t0_1.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
 fn oracle_tank_drive_plus_shoot_add_to_empty_smoke_glow_deform_t0_35_matches_cpp() {
     let data = load_data(&example_json_path("tank/export/tank-pro.json"));
     let mut skeleton = Skeleton::new(data.clone());
@@ -3547,6 +4136,225 @@ fn oracle_tank_shoot_to_shoot_mix_draw_order_threshold_1_t0_4_matches_cpp() {
 }
 
 #[test]
+fn oracle_tank_drive_t2_shoot_add_alpha0_5_t1_shoot_to_shoot_mix_draw_order_threshold_0_smoke_glow_t0_4_matches_cpp()
+ {
+    let data = load_data(&example_json_path("tank/export/tank-pro.json"));
+
+    let mut state_data = AnimationStateData::new(data.clone());
+    state_data
+        .set_mix("shoot", "shoot", 0.2)
+        .expect("set mix shoot->shoot");
+
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(state_data);
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "drive", true).expect("set drive");
+
+    let shoot_add = state
+        .set_animation(2, "shoot", false)
+        .expect("set shoot add");
+    shoot_add.set_mix_blend(&mut state, crate::MixBlend::Add);
+    shoot_add.set_alpha(&mut state, 0.5);
+
+    let shoot = state.set_animation(1, "shoot", false).expect("set shoot");
+    shoot.set_alpha(&mut state, 0.0);
+    step(&mut state, &mut skeleton, 0.35);
+    shoot.set_alpha(&mut state, 1.0);
+    shoot.set_mix_draw_order_threshold(&mut state, 0.0);
+
+    state.set_animation(1, "shoot", false).expect("set shoot 2");
+    step(&mut state, &mut skeleton, 0.05);
+
+    let rust = dump_pose(&skeleton, 0.4, Some("smoke-glow"));
+    let cpp = read_pose(&golden_path(
+        "tank_drive_t2_shoot_add_alpha0_5_t1_shoot_to_shoot_mixDrawOrderThreshold_0_smoke_glow_t0_4.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+fn oracle_tank_drive_t2_shoot_add_alpha0_5_t1_shoot_to_shoot_mix_draw_order_threshold_1_smoke_glow_t0_4_matches_cpp()
+ {
+    let data = load_data(&example_json_path("tank/export/tank-pro.json"));
+
+    let mut state_data = AnimationStateData::new(data.clone());
+    state_data
+        .set_mix("shoot", "shoot", 0.2)
+        .expect("set mix shoot->shoot");
+
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(state_data);
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "drive", true).expect("set drive");
+
+    let shoot_add = state
+        .set_animation(2, "shoot", false)
+        .expect("set shoot add");
+    shoot_add.set_mix_blend(&mut state, crate::MixBlend::Add);
+    shoot_add.set_alpha(&mut state, 0.5);
+
+    let shoot = state.set_animation(1, "shoot", false).expect("set shoot");
+    shoot.set_alpha(&mut state, 0.0);
+    step(&mut state, &mut skeleton, 0.35);
+    shoot.set_alpha(&mut state, 1.0);
+    shoot.set_mix_draw_order_threshold(&mut state, 1.0);
+
+    state.set_animation(1, "shoot", false).expect("set shoot 2");
+    step(&mut state, &mut skeleton, 0.05);
+
+    let rust = dump_pose(&skeleton, 0.4, Some("smoke-glow"));
+    let cpp = read_pose(&golden_path(
+        "tank_drive_t2_shoot_add_alpha0_5_t1_shoot_to_shoot_mixDrawOrderThreshold_1_smoke_glow_t0_4.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+fn oracle_tank_drive_t2_shoot_add_alpha0_5_t1_shoot_to_shoot_mix_attachment_threshold_0_smoke_glow_t0_4_matches_cpp()
+ {
+    let data = load_data(&example_json_path("tank/export/tank-pro.json"));
+
+    let mut state_data = AnimationStateData::new(data.clone());
+    state_data
+        .set_mix("shoot", "shoot", 0.2)
+        .expect("set mix shoot->shoot");
+
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(state_data);
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "drive", true).expect("set drive");
+
+    let shoot_add = state
+        .set_animation(2, "shoot", false)
+        .expect("set shoot add");
+    shoot_add.set_mix_blend(&mut state, crate::MixBlend::Add);
+    shoot_add.set_alpha(&mut state, 0.5);
+
+    let shoot = state.set_animation(1, "shoot", false).expect("set shoot");
+    shoot.set_alpha(&mut state, 0.0);
+    step(&mut state, &mut skeleton, 0.35);
+    shoot.set_alpha(&mut state, 1.0);
+    shoot.set_mix_attachment_threshold(&mut state, 0.0);
+
+    state.set_animation(1, "shoot", false).expect("set shoot 2");
+    step(&mut state, &mut skeleton, 0.05);
+
+    let rust = dump_pose(&skeleton, 0.4, Some("smoke-glow"));
+    let cpp = read_pose(&golden_path(
+        "tank_drive_t2_shoot_add_alpha0_5_t1_shoot_to_shoot_mixAttachmentThreshold_0_smoke_glow_t0_4.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+fn oracle_tank_drive_t2_shoot_add_alpha0_5_t1_shoot_to_shoot_mix_attachment_threshold_1_smoke_glow_t0_4_matches_cpp()
+ {
+    let data = load_data(&example_json_path("tank/export/tank-pro.json"));
+
+    let mut state_data = AnimationStateData::new(data.clone());
+    state_data
+        .set_mix("shoot", "shoot", 0.2)
+        .expect("set mix shoot->shoot");
+
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(state_data);
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "drive", true).expect("set drive");
+
+    let shoot_add = state
+        .set_animation(2, "shoot", false)
+        .expect("set shoot add");
+    shoot_add.set_mix_blend(&mut state, crate::MixBlend::Add);
+    shoot_add.set_alpha(&mut state, 0.5);
+
+    let shoot = state.set_animation(1, "shoot", false).expect("set shoot");
+    shoot.set_alpha(&mut state, 0.0);
+    step(&mut state, &mut skeleton, 0.35);
+    shoot.set_alpha(&mut state, 1.0);
+    shoot.set_mix_attachment_threshold(&mut state, 1.0);
+
+    state.set_animation(1, "shoot", false).expect("set shoot 2");
+    step(&mut state, &mut skeleton, 0.05);
+
+    let rust = dump_pose(&skeleton, 0.4, Some("smoke-glow"));
+    let cpp = read_pose(&golden_path(
+        "tank_drive_t2_shoot_add_alpha0_5_t1_shoot_to_shoot_mixAttachmentThreshold_1_smoke_glow_t0_4.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+fn oracle_tank_shoot_to_shoot_to_drive_hold_mix_smoke_glow_t0_2_matches_cpp() {
+    let data = load_data(&example_json_path("tank/export/tank-pro.json"));
+
+    let mut state_data = AnimationStateData::new(data.clone());
+    state_data
+        .set_mix("shoot", "shoot", 0.2)
+        .expect("set mix shoot->shoot");
+    state_data
+        .set_mix("shoot", "drive", 0.2)
+        .expect("set mix shoot->drive");
+
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(state_data);
+
+    skeleton.set_to_setup_pose();
+
+    state.set_animation(1, "shoot", false).expect("set shoot");
+    step(&mut state, &mut skeleton, 0.1);
+
+    state.set_animation(1, "shoot", false).expect("set shoot 2");
+    step(&mut state, &mut skeleton, 0.05);
+
+    state.set_animation(1, "drive", true).expect("set drive");
+    step(&mut state, &mut skeleton, 0.05);
+
+    let rust = dump_pose(&skeleton, 0.2, Some("smoke-glow"));
+    let cpp = read_pose(&golden_path(
+        "tank_shoot_to_shoot_to_drive_holdMix_smoke_glow_t0_2.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_tank_shoot_to_shoot_to_drive_hold_mix_smoke_glow_t0_2_matches_cpp() {
+    let data = load_data(&example_json_path("tank/export/tank-pro.skel"));
+
+    let mut state_data = AnimationStateData::new(data.clone());
+    state_data
+        .set_mix("shoot", "shoot", 0.2)
+        .expect("set mix shoot->shoot");
+    state_data
+        .set_mix("shoot", "drive", 0.2)
+        .expect("set mix shoot->drive");
+
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(state_data);
+
+    skeleton.set_to_setup_pose();
+
+    state.set_animation(1, "shoot", false).expect("set shoot");
+    step(&mut state, &mut skeleton, 0.1);
+
+    state.set_animation(1, "shoot", false).expect("set shoot 2");
+    step(&mut state, &mut skeleton, 0.05);
+
+    state.set_animation(1, "drive", true).expect("set drive");
+    step(&mut state, &mut skeleton, 0.05);
+
+    let rust = dump_pose(&skeleton, 0.2, Some("smoke-glow"));
+    let cpp = read_pose(&golden_skel_path(
+        "tank_shoot_to_shoot_to_drive_holdMix_smoke_glow_t0_2.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
 #[cfg(all(feature = "binary", feature = "upstream-smoke"))]
 fn oracle_skel_tank_shoot_to_shoot_mix_draw_order_threshold_1_t0_4_matches_cpp() {
     let data = load_data(&example_json_path("tank/export/tank-pro.skel"));
@@ -3578,6 +4386,218 @@ fn oracle_skel_tank_shoot_to_shoot_mix_draw_order_threshold_1_t0_4_matches_cpp()
 }
 
 #[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_tank_drive_t2_shoot_add_alpha0_5_t1_shoot_to_shoot_mix_draw_order_threshold_0_smoke_glow_t0_4_matches_cpp()
+ {
+    let data = load_data(&example_json_path("tank/export/tank-pro.skel"));
+
+    let mut state_data = AnimationStateData::new(data.clone());
+    state_data
+        .set_mix("shoot", "shoot", 0.2)
+        .expect("set mix shoot->shoot");
+
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(state_data);
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "drive", true).expect("set drive");
+
+    let shoot_add = state
+        .set_animation(2, "shoot", false)
+        .expect("set shoot add");
+    shoot_add.set_mix_blend(&mut state, crate::MixBlend::Add);
+    shoot_add.set_alpha(&mut state, 0.5);
+
+    let shoot = state.set_animation(1, "shoot", false).expect("set shoot");
+    shoot.set_alpha(&mut state, 0.0);
+    step(&mut state, &mut skeleton, 0.35);
+    shoot.set_alpha(&mut state, 1.0);
+    shoot.set_mix_draw_order_threshold(&mut state, 0.0);
+
+    state.set_animation(1, "shoot", false).expect("set shoot 2");
+    step(&mut state, &mut skeleton, 0.05);
+
+    let rust = dump_pose(&skeleton, 0.4, Some("smoke-glow"));
+    let cpp = read_pose(&golden_skel_path(
+        "tank_drive_t2_shoot_add_alpha0_5_t1_shoot_to_shoot_mixDrawOrderThreshold_0_smoke_glow_t0_4.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_tank_drive_t2_shoot_add_alpha0_5_t1_shoot_to_shoot_mix_draw_order_threshold_1_smoke_glow_t0_4_matches_cpp()
+ {
+    let data = load_data(&example_json_path("tank/export/tank-pro.skel"));
+
+    let mut state_data = AnimationStateData::new(data.clone());
+    state_data
+        .set_mix("shoot", "shoot", 0.2)
+        .expect("set mix shoot->shoot");
+
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(state_data);
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "drive", true).expect("set drive");
+
+    let shoot_add = state
+        .set_animation(2, "shoot", false)
+        .expect("set shoot add");
+    shoot_add.set_mix_blend(&mut state, crate::MixBlend::Add);
+    shoot_add.set_alpha(&mut state, 0.5);
+
+    let shoot = state.set_animation(1, "shoot", false).expect("set shoot");
+    shoot.set_alpha(&mut state, 0.0);
+    step(&mut state, &mut skeleton, 0.35);
+    shoot.set_alpha(&mut state, 1.0);
+    shoot.set_mix_draw_order_threshold(&mut state, 1.0);
+
+    state.set_animation(1, "shoot", false).expect("set shoot 2");
+    step(&mut state, &mut skeleton, 0.05);
+
+    let rust = dump_pose(&skeleton, 0.4, Some("smoke-glow"));
+    let cpp = read_pose(&golden_skel_path(
+        "tank_drive_t2_shoot_add_alpha0_5_t1_shoot_to_shoot_mixDrawOrderThreshold_1_smoke_glow_t0_4.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_tank_drive_t2_shoot_add_alpha0_5_t1_shoot_to_shoot_mix_attachment_threshold_0_smoke_glow_t0_4_matches_cpp()
+ {
+    let data = load_data(&example_json_path("tank/export/tank-pro.skel"));
+
+    let mut state_data = AnimationStateData::new(data.clone());
+    state_data
+        .set_mix("shoot", "shoot", 0.2)
+        .expect("set mix shoot->shoot");
+
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(state_data);
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "drive", true).expect("set drive");
+
+    let shoot_add = state
+        .set_animation(2, "shoot", false)
+        .expect("set shoot add");
+    shoot_add.set_mix_blend(&mut state, crate::MixBlend::Add);
+    shoot_add.set_alpha(&mut state, 0.5);
+
+    let shoot = state.set_animation(1, "shoot", false).expect("set shoot");
+    shoot.set_alpha(&mut state, 0.0);
+    step(&mut state, &mut skeleton, 0.35);
+    shoot.set_alpha(&mut state, 1.0);
+    shoot.set_mix_attachment_threshold(&mut state, 0.0);
+
+    state.set_animation(1, "shoot", false).expect("set shoot 2");
+    step(&mut state, &mut skeleton, 0.05);
+
+    let rust = dump_pose(&skeleton, 0.4, Some("smoke-glow"));
+    let cpp = read_pose(&golden_skel_path(
+        "tank_drive_t2_shoot_add_alpha0_5_t1_shoot_to_shoot_mixAttachmentThreshold_0_smoke_glow_t0_4.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_tank_drive_t2_shoot_add_alpha0_5_t1_shoot_to_shoot_mix_attachment_threshold_1_smoke_glow_t0_4_matches_cpp()
+ {
+    let data = load_data(&example_json_path("tank/export/tank-pro.skel"));
+
+    let mut state_data = AnimationStateData::new(data.clone());
+    state_data
+        .set_mix("shoot", "shoot", 0.2)
+        .expect("set mix shoot->shoot");
+
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(state_data);
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "drive", true).expect("set drive");
+
+    let shoot_add = state
+        .set_animation(2, "shoot", false)
+        .expect("set shoot add");
+    shoot_add.set_mix_blend(&mut state, crate::MixBlend::Add);
+    shoot_add.set_alpha(&mut state, 0.5);
+
+    let shoot = state.set_animation(1, "shoot", false).expect("set shoot");
+    shoot.set_alpha(&mut state, 0.0);
+    step(&mut state, &mut skeleton, 0.35);
+    shoot.set_alpha(&mut state, 1.0);
+    shoot.set_mix_attachment_threshold(&mut state, 1.0);
+
+    state.set_animation(1, "shoot", false).expect("set shoot 2");
+    step(&mut state, &mut skeleton, 0.05);
+
+    let rust = dump_pose(&skeleton, 0.4, Some("smoke-glow"));
+    let cpp = read_pose(&golden_skel_path(
+        "tank_drive_t2_shoot_add_alpha0_5_t1_shoot_to_shoot_mixAttachmentThreshold_1_smoke_glow_t0_4.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+fn oracle_tank_drive_t1_shoot_add_alpha0_5_t2_shoot_replace_alpha0_5_t0_3_smoke_glow_matches_cpp() {
+    let data = load_data(&example_json_path("tank/export/tank-pro.json"));
+
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "drive", true).expect("set drive");
+    step(&mut state, &mut skeleton, 0.1);
+
+    let shoot_add = state.set_animation(1, "shoot", false).expect("set shoot");
+    shoot_add.set_mix_blend(&mut state, crate::MixBlend::Add);
+    shoot_add.set_alpha(&mut state, 0.5);
+    step(&mut state, &mut skeleton, 0.1);
+
+    let shoot_replace = state.set_animation(2, "shoot", false).expect("set shoot 2");
+    shoot_replace.set_alpha(&mut state, 0.5);
+    step(&mut state, &mut skeleton, 0.1);
+
+    let rust = dump_pose(&skeleton, 0.3, Some("smoke-glow"));
+    let cpp = read_pose(&golden_path(
+        "tank_drive_t1_shoot_add_alpha0_5_t2_shoot_replace_alpha0_5_t0_3_smoke_glow.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_tank_drive_t1_shoot_add_alpha0_5_t2_shoot_replace_alpha0_5_t0_3_smoke_glow_matches_cpp()
+ {
+    let data = load_data(&example_json_path("tank/export/tank-pro.skel"));
+
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "drive", true).expect("set drive");
+    step(&mut state, &mut skeleton, 0.1);
+
+    let shoot_add = state.set_animation(1, "shoot", false).expect("set shoot");
+    shoot_add.set_mix_blend(&mut state, crate::MixBlend::Add);
+    shoot_add.set_alpha(&mut state, 0.5);
+    step(&mut state, &mut skeleton, 0.1);
+
+    let shoot_replace = state.set_animation(2, "shoot", false).expect("set shoot 2");
+    shoot_replace.set_alpha(&mut state, 0.5);
+    step(&mut state, &mut skeleton, 0.1);
+
+    let rust = dump_pose(&skeleton, 0.3, Some("smoke-glow"));
+    let cpp = read_pose(&golden_skel_path(
+        "tank_drive_t1_shoot_add_alpha0_5_t2_shoot_replace_alpha0_5_t0_3_smoke_glow.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
 fn oracle_spineboy_run_plus_aim_add_t0_2_matches_cpp() {
     let data = load_data(&example_json_path("spineboy/export/spineboy-pro.json"));
     let mut skeleton = Skeleton::new(data.clone());
@@ -3593,6 +4613,33 @@ fn oracle_spineboy_run_plus_aim_add_t0_2_matches_cpp() {
 
     let rust = dump_pose(&skeleton, 0.2, None);
     let cpp = read_pose(&golden_path("spineboy_run_plus_aim_add_t0_2.json"));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+fn oracle_spineboy_run_plus_aim_add_to_empty_immediate_mix0_2_t0_1_matches_cpp() {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.json"));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "run", true).expect("set run");
+
+    let aim = state.set_animation(1, "aim", true).expect("set aim");
+    aim.set_mix_blend(&mut state, crate::MixBlend::Add);
+
+    // Critical edge case: immediately mix out before the Add entry is ever applied.
+    state
+        .set_empty_animation(1, 0.2)
+        .expect("set empty animation");
+
+    let dt = 0.1;
+    step(&mut state, &mut skeleton, dt);
+
+    let rust = dump_pose(&skeleton, dt, None);
+    let cpp = read_pose(&golden_path(
+        "spineboy_run_plus_aim_add_to_empty_immediate_mix0_2_t0_1.json",
+    ));
     assert_pose_parity(&rust, &cpp, 1.0e-3);
 }
 
@@ -3668,6 +4715,979 @@ fn oracle_spineboy_run_plus_portal_add_to_empty_mix0_2_jitter_dt_t0_6_matches_cp
 }
 
 #[test]
+fn oracle_spineboy_run_plus_portal_add_reverse_t0_35_matches_cpp() {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.json"));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "run", true).expect("set run");
+    step(&mut state, &mut skeleton, 0.0);
+
+    let portal = state.set_animation(1, "portal", false).expect("set portal");
+    portal.set_mix_blend(&mut state, crate::MixBlend::Add);
+    portal.set_reverse(&mut state, true);
+
+    let dt = 0.35;
+    step(&mut state, &mut skeleton, dt);
+
+    let rust = dump_pose(&skeleton, dt, None);
+    let cpp = read_pose(&golden_path(
+        "spineboy_run_plus_portal_add_reverse_t0_35.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+fn oracle_spineboy_run_plus_portal_add_reverse_to_empty_immediate_mix0_2_t0_1_matches_cpp() {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.json"));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "run", true).expect("set run");
+
+    let portal = state.set_animation(1, "portal", false).expect("set portal");
+    portal.set_mix_blend(&mut state, crate::MixBlend::Add);
+    portal.set_reverse(&mut state, true);
+
+    // Critical edge case: immediately mix out before the (reverse) Add entry is ever applied.
+    state
+        .set_empty_animation(1, 0.2)
+        .expect("set empty animation");
+
+    let dt = 0.1;
+    step(&mut state, &mut skeleton, dt);
+
+    let rust = dump_pose(&skeleton, dt, None);
+    let cpp = read_pose(&golden_path(
+        "spineboy_run_plus_portal_add_reverse_to_empty_immediate_mix0_2_t0_1.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+fn oracle_spineboy_portal_reverse_t0_5_matches_cpp() {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.json"));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    let portal = state.set_animation(0, "portal", false).expect("set portal");
+    portal.set_reverse(&mut state, true);
+
+    let dt = 0.5;
+    step(&mut state, &mut skeleton, dt);
+
+    let rust = dump_pose(&skeleton, dt, None);
+    let cpp = read_pose(&golden_path("spineboy_portal_reverse_t0_5.json"));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+fn oracle_spineboy_portal_alpha0_5_shortest_rotation_true_t2_0_matches_cpp() {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.json"));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    let portal = state.set_animation(0, "portal", false).expect("set portal");
+    portal.set_alpha(&mut state, 0.5);
+    portal.set_shortest_rotation(&mut state, true);
+
+    let dt = 2.0;
+    step(&mut state, &mut skeleton, dt);
+
+    let rust = dump_pose(&skeleton, dt, None);
+    let cpp = read_pose(&golden_path(
+        "spineboy_portal_alpha0_5_shortestRotation_true_t2_0.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+fn oracle_spineboy_run_to_portal_reverse_mix0_2_t0_1_matches_cpp() {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.json"));
+
+    let mut state_data = AnimationStateData::new(data.clone());
+    state_data
+        .set_mix("run", "portal", 0.2)
+        .expect("set mix run->portal");
+
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(state_data);
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "run", true).expect("set run");
+    step(&mut state, &mut skeleton, 0.0);
+
+    let portal = state.set_animation(0, "portal", false).expect("set portal");
+    portal.set_reverse(&mut state, true);
+
+    let dt = 0.1;
+    step(&mut state, &mut skeleton, dt);
+
+    let rust = dump_pose(&skeleton, dt, None);
+    let cpp = read_pose(&golden_path(
+        "spineboy_run_to_portal_reverse_mix0_2_t0_1.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+fn oracle_spineboy_run_to_portal_mix0_2_shortest_rotation_true_t0_1_matches_cpp() {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.json"));
+
+    let mut state_data = AnimationStateData::new(data.clone());
+    state_data
+        .set_mix("run", "portal", 0.2)
+        .expect("set mix run->portal");
+
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(state_data);
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "run", true).expect("set run");
+    step(&mut state, &mut skeleton, 0.0);
+
+    let portal = state.set_animation(0, "portal", false).expect("set portal");
+    portal.set_shortest_rotation(&mut state, true);
+
+    let dt = 0.1;
+    step(&mut state, &mut skeleton, dt);
+
+    let rust = dump_pose(&skeleton, dt, None);
+    let cpp = read_pose(&golden_path(
+        "spineboy_run_to_portal_mix0_2_shortestRotation_true_t0_1.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+fn oracle_spineboy_portal_reverse_to_shoot_mix0_2_t0_1_matches_cpp() {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.json"));
+
+    let mut state_data = AnimationStateData::new(data.clone());
+    state_data
+        .set_mix("portal", "shoot", 0.2)
+        .expect("set mix portal->shoot");
+
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(state_data);
+
+    skeleton.set_to_setup_pose();
+    let portal = state.set_animation(0, "portal", false).expect("set portal");
+    portal.set_reverse(&mut state, true);
+    step(&mut state, &mut skeleton, 0.05);
+
+    state.set_animation(0, "shoot", false).expect("set shoot");
+    step(&mut state, &mut skeleton, 0.05);
+
+    let rust = dump_pose(&skeleton, 0.1, None);
+    let cpp = read_pose(&golden_path(
+        "spineboy_portal_reverse_to_shoot_mix0_2_t0_1.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+fn oracle_spineboy_portal_shortest_rotation_true_to_shoot_mix0_2_t0_1_matches_cpp() {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.json"));
+
+    let mut state_data = AnimationStateData::new(data.clone());
+    state_data
+        .set_mix("portal", "shoot", 0.2)
+        .expect("set mix portal->shoot");
+
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(state_data);
+
+    skeleton.set_to_setup_pose();
+    let portal = state.set_animation(0, "portal", false).expect("set portal");
+    portal.set_shortest_rotation(&mut state, true);
+    step(&mut state, &mut skeleton, 0.05);
+
+    state.set_animation(0, "shoot", false).expect("set shoot");
+    step(&mut state, &mut skeleton, 0.05);
+
+    let rust = dump_pose(&skeleton, 0.1, None);
+    let cpp = read_pose(&golden_path(
+        "spineboy_portal_shortestRotation_true_to_shoot_mix0_2_t0_1.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+fn oracle_spineboy_portal_alpha0_5_reset_rotation_directions_t0_4_matches_cpp() {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.json"));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    let portal = state.set_animation(0, "portal", false).expect("set portal");
+    portal.set_alpha(&mut state, 0.5);
+
+    step(&mut state, &mut skeleton, 0.2);
+    portal.reset_rotation_directions(&mut state);
+    step(&mut state, &mut skeleton, 0.2);
+
+    let rust = dump_pose(&skeleton, 0.4, None);
+    let cpp = read_pose(&golden_path(
+        "spineboy_portal_alpha0_5_reset_rotation_directions_t0_4.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+fn oracle_spineboy_portal_add_reverse_to_shoot_replace_mix0_2_t0_1_matches_cpp() {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.json"));
+
+    let mut state_data = AnimationStateData::new(data.clone());
+    state_data
+        .set_mix("portal", "shoot", 0.2)
+        .expect("set mix portal->shoot");
+
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(state_data);
+
+    skeleton.set_to_setup_pose();
+    let portal = state.set_animation(0, "portal", false).expect("set portal");
+    portal.set_mix_blend(&mut state, crate::MixBlend::Add);
+    portal.set_reverse(&mut state, true);
+    step(&mut state, &mut skeleton, 0.05);
+
+    // Deliberately leave the new entry as default `MixBlend::Replace` to lock the
+    // from(Add) -> to(Replace) interaction in `applyMixingFrom` under `reverse=true`.
+    state.set_animation(0, "shoot", false).expect("set shoot");
+    step(&mut state, &mut skeleton, 0.05);
+
+    let rust = dump_pose(&skeleton, 0.1, None);
+    let cpp = read_pose(&golden_path(
+        "spineboy_portal_add_reverse_to_shoot_replace_mix0_2_t0_1.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+fn oracle_spineboy_holdprev_chain_aim_add_shortest_rotation_true_shoot_add_reverse_to_portal_replace_t0_2_matches_cpp()
+ {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.json"));
+
+    let mut state_data = AnimationStateData::new(data.clone());
+    state_data
+        .set_mix("aim", "shoot", 0.2)
+        .expect("set mix aim->shoot");
+    state_data
+        .set_mix("shoot", "portal", 0.2)
+        .expect("set mix shoot->portal");
+
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(state_data);
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "run", true).expect("set run");
+
+    let aim = state.set_animation(1, "aim", true).expect("set aim");
+    aim.set_mix_blend(&mut state, crate::MixBlend::Add);
+    aim.set_hold_previous(&mut state, true);
+    aim.set_shortest_rotation(&mut state, true);
+    step(&mut state, &mut skeleton, 0.1);
+
+    let shoot = state.set_animation(1, "shoot", false).expect("set shoot");
+    shoot.set_mix_blend(&mut state, crate::MixBlend::Add);
+    shoot.set_hold_previous(&mut state, true);
+    shoot.set_reverse(&mut state, true);
+    step(&mut state, &mut skeleton, 0.05);
+
+    // Deliberately leave the new entry as default `MixBlend::Replace` to lock the
+    // from(Add+reverse/shortestRotation) -> to(Replace) behaviour over a holdPrevious chain.
+    state.set_animation(1, "portal", true).expect("set portal");
+    step(&mut state, &mut skeleton, 0.05);
+
+    let rust = dump_pose(&skeleton, 0.2, None);
+    let cpp = read_pose(&golden_path(
+        "spineboy_holdprev_chain_aim_add_shortestRotation_true_shoot_add_reverse_to_portal_replace_t0_2.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+fn oracle_spineboy_holdprev_chain_aim_add_to_shoot_replace_to_portal_add_reverse_to_death_replace_t0_25_matches_cpp()
+ {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.json"));
+
+    let mut state_data = AnimationStateData::new(data.clone());
+    state_data
+        .set_mix("aim", "shoot", 0.2)
+        .expect("set mix aim->shoot");
+    state_data
+        .set_mix("shoot", "portal", 0.2)
+        .expect("set mix shoot->portal");
+    state_data
+        .set_mix("portal", "death", 0.2)
+        .expect("set mix portal->death");
+
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(state_data);
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "run", true).expect("set run");
+
+    let aim = state.set_animation(1, "aim", true).expect("set aim");
+    aim.set_mix_blend(&mut state, crate::MixBlend::Add);
+    aim.set_hold_previous(&mut state, true);
+    step(&mut state, &mut skeleton, 0.05);
+
+    let shoot = state.set_animation(1, "shoot", false).expect("set shoot");
+    shoot.set_hold_previous(&mut state, true);
+    step(&mut state, &mut skeleton, 0.05);
+
+    let portal = state.set_animation(1, "portal", false).expect("set portal");
+    portal.set_mix_blend(&mut state, crate::MixBlend::Add);
+    portal.set_reverse(&mut state, true);
+    portal.set_hold_previous(&mut state, true);
+    step(&mut state, &mut skeleton, 0.05);
+
+    let death = state.set_animation(1, "death", false).expect("set death");
+    death.set_shortest_rotation(&mut state, true);
+    death.set_alpha(&mut state, 0.5);
+    step(&mut state, &mut skeleton, 0.1);
+
+    let rust = dump_pose(&skeleton, 0.25, None);
+    let cpp = read_pose(&golden_path(
+        "spineboy_holdprev_chain_aim_add_to_shoot_replace_to_portal_add_reverse_to_death_replace_t0_25.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+fn oracle_spineboy_aim_to_shoot_to_portal_hold_mix_t0_2_matches_cpp() {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.json"));
+
+    let mut state_data = AnimationStateData::new(data.clone());
+    state_data
+        .set_mix("aim", "shoot", 0.2)
+        .expect("set mix aim->shoot");
+    state_data
+        .set_mix("shoot", "portal", 0.2)
+        .expect("set mix shoot->portal");
+
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(state_data);
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "run", true).expect("set run");
+
+    state.set_animation(1, "aim", true).expect("set aim");
+    step(&mut state, &mut skeleton, 0.1);
+
+    state.set_animation(1, "shoot", false).expect("set shoot");
+    step(&mut state, &mut skeleton, 0.05);
+
+    state.set_animation(1, "portal", false).expect("set portal");
+    step(&mut state, &mut skeleton, 0.05);
+
+    let rust = dump_pose(&skeleton, 0.2, Some("gun"));
+    let cpp = read_pose(&golden_path(
+        "spineboy_aim_to_shoot_to_portal_holdMix_t0_2.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_spineboy_aim_to_shoot_to_portal_hold_mix_t0_2_matches_cpp() {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.skel"));
+
+    let mut state_data = AnimationStateData::new(data.clone());
+    state_data
+        .set_mix("aim", "shoot", 0.2)
+        .expect("set mix aim->shoot");
+    state_data
+        .set_mix("shoot", "portal", 0.2)
+        .expect("set mix shoot->portal");
+
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(state_data);
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "run", true).expect("set run");
+
+    state.set_animation(1, "aim", true).expect("set aim");
+    step(&mut state, &mut skeleton, 0.1);
+
+    state.set_animation(1, "shoot", false).expect("set shoot");
+    step(&mut state, &mut skeleton, 0.05);
+
+    state.set_animation(1, "portal", false).expect("set portal");
+    step(&mut state, &mut skeleton, 0.05);
+
+    let rust = dump_pose(&skeleton, 0.2, Some("gun"));
+    let cpp = read_pose(&golden_skel_path(
+        "spineboy_aim_to_shoot_to_portal_holdMix_t0_2.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+fn oracle_spineboy_aim_to_shoot_interrupt_to_portal_mix0_2_t0_2_matches_cpp() {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.json"));
+
+    let mut state_data = AnimationStateData::new(data.clone());
+    state_data
+        .set_mix("aim", "shoot", 0.2)
+        .expect("set mix aim->shoot");
+    state_data
+        .set_mix("shoot", "portal", 0.2)
+        .expect("set mix shoot->portal");
+
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(state_data);
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "run", true).expect("set run");
+
+    state.set_animation(1, "aim", true).expect("set aim");
+    step(&mut state, &mut skeleton, 0.1);
+
+    state.set_animation(1, "shoot", false).expect("set shoot");
+    step(&mut state, &mut skeleton, 0.05);
+
+    // Interrupt the mix before it completes: portal's interruptAlpha should capture shoot's mix ratio.
+    state.set_animation(1, "portal", false).expect("set portal");
+    step(&mut state, &mut skeleton, 0.05);
+
+    let rust = dump_pose(&skeleton, 0.2, Some("gun"));
+    let cpp = read_pose(&golden_path(
+        "spineboy_aim_to_shoot_interrupt_to_portal_mix0_2_t0_2.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_spineboy_aim_to_shoot_interrupt_to_portal_mix0_2_t0_2_matches_cpp() {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.skel"));
+
+    let mut state_data = AnimationStateData::new(data.clone());
+    state_data
+        .set_mix("aim", "shoot", 0.2)
+        .expect("set mix aim->shoot");
+    state_data
+        .set_mix("shoot", "portal", 0.2)
+        .expect("set mix shoot->portal");
+
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(state_data);
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "run", true).expect("set run");
+
+    state.set_animation(1, "aim", true).expect("set aim");
+    step(&mut state, &mut skeleton, 0.1);
+
+    state.set_animation(1, "shoot", false).expect("set shoot");
+    step(&mut state, &mut skeleton, 0.05);
+
+    state.set_animation(1, "portal", false).expect("set portal");
+    step(&mut state, &mut skeleton, 0.05);
+
+    let rust = dump_pose(&skeleton, 0.2, Some("gun"));
+    let cpp = read_pose(&golden_skel_path(
+        "spineboy_aim_to_shoot_interrupt_to_portal_mix0_2_t0_2.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+fn oracle_spineboy_run_t1_aim_add_alpha0_5_t2_shoot_replace_alpha0_5_t0_3_matches_cpp() {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.json"));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "run", true).expect("set run");
+    step(&mut state, &mut skeleton, 0.1);
+
+    let aim = state.set_animation(1, "aim", true).expect("set aim");
+    aim.set_mix_blend(&mut state, crate::MixBlend::Add);
+    aim.set_alpha(&mut state, 0.5);
+    step(&mut state, &mut skeleton, 0.1);
+
+    let shoot = state.set_animation(2, "shoot", false).expect("set shoot");
+    shoot.set_alpha(&mut state, 0.5);
+    step(&mut state, &mut skeleton, 0.1);
+
+    let rust = dump_pose(&skeleton, 0.3, Some("gun"));
+    let cpp = read_pose(&golden_path(
+        "spineboy_run_t1_aim_add_alpha0_5_t2_shoot_replace_alpha0_5_t0_3.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_spineboy_run_t1_aim_add_alpha0_5_t2_shoot_replace_alpha0_5_t0_3_matches_cpp() {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.skel"));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "run", true).expect("set run");
+    step(&mut state, &mut skeleton, 0.1);
+
+    let aim = state.set_animation(1, "aim", true).expect("set aim");
+    aim.set_mix_blend(&mut state, crate::MixBlend::Add);
+    aim.set_alpha(&mut state, 0.5);
+    step(&mut state, &mut skeleton, 0.1);
+
+    let shoot = state.set_animation(2, "shoot", false).expect("set shoot");
+    shoot.set_alpha(&mut state, 0.5);
+    step(&mut state, &mut skeleton, 0.1);
+
+    let rust = dump_pose(&skeleton, 0.3, Some("gun"));
+    let cpp = read_pose(&golden_skel_path(
+        "spineboy_run_t1_aim_add_alpha0_5_t2_shoot_replace_alpha0_5_t0_3.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+fn oracle_spineboy_run_t1_aim_add_alpha0_5_t2_shoot_add_alpha0_5_t0_3_matches_cpp() {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.json"));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "run", true).expect("set run");
+    step(&mut state, &mut skeleton, 0.1);
+
+    let aim = state.set_animation(1, "aim", true).expect("set aim");
+    aim.set_mix_blend(&mut state, crate::MixBlend::Add);
+    aim.set_alpha(&mut state, 0.5);
+    step(&mut state, &mut skeleton, 0.1);
+
+    let shoot = state.set_animation(2, "shoot", false).expect("set shoot");
+    shoot.set_mix_blend(&mut state, crate::MixBlend::Add);
+    shoot.set_alpha(&mut state, 0.5);
+    step(&mut state, &mut skeleton, 0.1);
+
+    let rust = dump_pose(&skeleton, 0.3, Some("gun"));
+    let cpp = read_pose(&golden_path(
+        "spineboy_run_t1_aim_add_alpha0_5_t2_shoot_add_alpha0_5_t0_3.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_spineboy_run_t1_aim_add_alpha0_5_t2_shoot_add_alpha0_5_t0_3_matches_cpp() {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.skel"));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "run", true).expect("set run");
+    step(&mut state, &mut skeleton, 0.1);
+
+    let aim = state.set_animation(1, "aim", true).expect("set aim");
+    aim.set_mix_blend(&mut state, crate::MixBlend::Add);
+    aim.set_alpha(&mut state, 0.5);
+    step(&mut state, &mut skeleton, 0.1);
+
+    let shoot = state.set_animation(2, "shoot", false).expect("set shoot");
+    shoot.set_mix_blend(&mut state, crate::MixBlend::Add);
+    shoot.set_alpha(&mut state, 0.5);
+    step(&mut state, &mut skeleton, 0.1);
+
+    let rust = dump_pose(&skeleton, 0.3, Some("gun"));
+    let cpp = read_pose(&golden_skel_path(
+        "spineboy_run_t1_aim_add_alpha0_5_t2_shoot_add_alpha0_5_t0_3.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+fn oracle_spineboy_run_t1_aim_add_alpha0_5_t2_aim_to_shoot_mix0_2_mix_attachment_threshold_0_mix_draw_order_threshold_0_interrupt_to_portal_t0_3_matches_cpp()
+ {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.json"));
+
+    let mut state_data = AnimationStateData::new(data.clone());
+    state_data
+        .set_mix("aim", "shoot", 0.2)
+        .expect("set mix aim->shoot");
+    state_data
+        .set_mix("shoot", "portal", 0.2)
+        .expect("set mix shoot->portal");
+
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(state_data);
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "run", true).expect("set run");
+    step(&mut state, &mut skeleton, 0.1);
+
+    let aim_add = state.set_animation(1, "aim", true).expect("set aim");
+    aim_add.set_mix_blend(&mut state, crate::MixBlend::Add);
+    aim_add.set_alpha(&mut state, 0.5);
+    step(&mut state, &mut skeleton, 0.05);
+
+    state.set_animation(2, "aim", true).expect("set aim 2");
+    step(&mut state, &mut skeleton, 0.05);
+
+    let shoot = state.set_animation(2, "shoot", false).expect("set shoot");
+    shoot.set_mix_attachment_threshold(&mut state, 0.0);
+    shoot.set_mix_draw_order_threshold(&mut state, 0.0);
+
+    step(&mut state, &mut skeleton, 0.05);
+
+    // Interrupt before `aim -> shoot` completes to lock `interruptAlpha` and threshold gating.
+    state.set_animation(2, "portal", false).expect("set portal");
+    step(&mut state, &mut skeleton, 0.05);
+
+    let rust = dump_pose(&skeleton, 0.3, Some("gun"));
+    let cpp = read_pose(&golden_path(
+        "spineboy_run_t1_aim_add_alpha0_5_t2_aim_to_shoot_mix0_2_mixAttachmentThreshold_0_mixDrawOrderThreshold_0_interrupt_to_portal_t0_3.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_spineboy_run_t1_aim_add_alpha0_5_t2_aim_to_shoot_mix0_2_mix_attachment_threshold_0_mix_draw_order_threshold_0_interrupt_to_portal_t0_3_matches_cpp()
+ {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.skel"));
+
+    let mut state_data = AnimationStateData::new(data.clone());
+    state_data
+        .set_mix("aim", "shoot", 0.2)
+        .expect("set mix aim->shoot");
+    state_data
+        .set_mix("shoot", "portal", 0.2)
+        .expect("set mix shoot->portal");
+
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(state_data);
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "run", true).expect("set run");
+    step(&mut state, &mut skeleton, 0.1);
+
+    let aim_add = state.set_animation(1, "aim", true).expect("set aim");
+    aim_add.set_mix_blend(&mut state, crate::MixBlend::Add);
+    aim_add.set_alpha(&mut state, 0.5);
+    step(&mut state, &mut skeleton, 0.05);
+
+    state.set_animation(2, "aim", true).expect("set aim 2");
+    step(&mut state, &mut skeleton, 0.05);
+
+    let shoot = state.set_animation(2, "shoot", false).expect("set shoot");
+    shoot.set_mix_attachment_threshold(&mut state, 0.0);
+    shoot.set_mix_draw_order_threshold(&mut state, 0.0);
+
+    step(&mut state, &mut skeleton, 0.05);
+
+    state.set_animation(2, "portal", false).expect("set portal");
+    step(&mut state, &mut skeleton, 0.05);
+
+    let rust = dump_pose(&skeleton, 0.3, Some("gun"));
+    let cpp = read_pose(&golden_skel_path(
+        "spineboy_run_t1_aim_add_alpha0_5_t2_aim_to_shoot_mix0_2_mixAttachmentThreshold_0_mixDrawOrderThreshold_0_interrupt_to_portal_t0_3.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+fn oracle_spineboy_run_t1_aim_add_alpha0_5_t2_aim_to_shoot_mix0_2_mix_attachment_threshold_1_mix_draw_order_threshold_1_interrupt_to_portal_t0_3_matches_cpp()
+ {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.json"));
+
+    let mut state_data = AnimationStateData::new(data.clone());
+    state_data
+        .set_mix("aim", "shoot", 0.2)
+        .expect("set mix aim->shoot");
+    state_data
+        .set_mix("shoot", "portal", 0.2)
+        .expect("set mix shoot->portal");
+
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(state_data);
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "run", true).expect("set run");
+    step(&mut state, &mut skeleton, 0.1);
+
+    let aim_add = state.set_animation(1, "aim", true).expect("set aim");
+    aim_add.set_mix_blend(&mut state, crate::MixBlend::Add);
+    aim_add.set_alpha(&mut state, 0.5);
+    step(&mut state, &mut skeleton, 0.05);
+
+    state.set_animation(2, "aim", true).expect("set aim 2");
+    step(&mut state, &mut skeleton, 0.05);
+
+    let shoot = state.set_animation(2, "shoot", false).expect("set shoot");
+    shoot.set_mix_attachment_threshold(&mut state, 1.0);
+    shoot.set_mix_draw_order_threshold(&mut state, 1.0);
+
+    step(&mut state, &mut skeleton, 0.05);
+
+    state.set_animation(2, "portal", false).expect("set portal");
+    step(&mut state, &mut skeleton, 0.05);
+
+    let rust = dump_pose(&skeleton, 0.3, Some("gun"));
+    let cpp = read_pose(&golden_path(
+        "spineboy_run_t1_aim_add_alpha0_5_t2_aim_to_shoot_mix0_2_mixAttachmentThreshold_1_mixDrawOrderThreshold_1_interrupt_to_portal_t0_3.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_spineboy_run_t1_aim_add_alpha0_5_t2_aim_to_shoot_mix0_2_mix_attachment_threshold_1_mix_draw_order_threshold_1_interrupt_to_portal_t0_3_matches_cpp()
+ {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.skel"));
+
+    let mut state_data = AnimationStateData::new(data.clone());
+    state_data
+        .set_mix("aim", "shoot", 0.2)
+        .expect("set mix aim->shoot");
+    state_data
+        .set_mix("shoot", "portal", 0.2)
+        .expect("set mix shoot->portal");
+
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(state_data);
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "run", true).expect("set run");
+    step(&mut state, &mut skeleton, 0.1);
+
+    let aim_add = state.set_animation(1, "aim", true).expect("set aim");
+    aim_add.set_mix_blend(&mut state, crate::MixBlend::Add);
+    aim_add.set_alpha(&mut state, 0.5);
+    step(&mut state, &mut skeleton, 0.05);
+
+    state.set_animation(2, "aim", true).expect("set aim 2");
+    step(&mut state, &mut skeleton, 0.05);
+
+    let shoot = state.set_animation(2, "shoot", false).expect("set shoot");
+    shoot.set_mix_attachment_threshold(&mut state, 1.0);
+    shoot.set_mix_draw_order_threshold(&mut state, 1.0);
+
+    step(&mut state, &mut skeleton, 0.05);
+
+    state.set_animation(2, "portal", false).expect("set portal");
+    step(&mut state, &mut skeleton, 0.05);
+
+    let rust = dump_pose(&skeleton, 0.3, Some("gun"));
+    let cpp = read_pose(&golden_skel_path(
+        "spineboy_run_t1_aim_add_alpha0_5_t2_aim_to_shoot_mix0_2_mixAttachmentThreshold_1_mixDrawOrderThreshold_1_interrupt_to_portal_t0_3.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+fn oracle_spineboy_run_t1_shoot_add_alpha0_5_t2_aim_to_shoot_mix0_2_mix_attachment_threshold_0_mix_draw_order_threshold_0_interrupt_to_portal_t0_3_matches_cpp()
+ {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.json"));
+
+    let mut state_data = AnimationStateData::new(data.clone());
+    state_data
+        .set_mix("aim", "shoot", 0.2)
+        .expect("set mix aim->shoot");
+    state_data
+        .set_mix("shoot", "portal", 0.2)
+        .expect("set mix shoot->portal");
+
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(state_data);
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "run", true).expect("set run");
+    step(&mut state, &mut skeleton, 0.1);
+
+    let shoot_add = state.set_animation(1, "shoot", false).expect("set shoot");
+    shoot_add.set_mix_blend(&mut state, crate::MixBlend::Add);
+    shoot_add.set_alpha(&mut state, 0.5);
+    step(&mut state, &mut skeleton, 0.05);
+
+    state.set_animation(2, "aim", true).expect("set aim 2");
+    step(&mut state, &mut skeleton, 0.05);
+
+    let shoot = state.set_animation(2, "shoot", false).expect("set shoot 2");
+    shoot.set_mix_attachment_threshold(&mut state, 0.0);
+    shoot.set_mix_draw_order_threshold(&mut state, 0.0);
+    step(&mut state, &mut skeleton, 0.05);
+
+    state.set_animation(2, "portal", false).expect("set portal");
+    step(&mut state, &mut skeleton, 0.05);
+
+    let rust = dump_pose(&skeleton, 0.3, Some("gun"));
+    let cpp = read_pose(&golden_path(
+        "spineboy_run_t1_shoot_add_alpha0_5_t2_aim_to_shoot_mix0_2_mixAttachmentThreshold_0_mixDrawOrderThreshold_0_interrupt_to_portal_t0_3.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_spineboy_run_t1_shoot_add_alpha0_5_t2_aim_to_shoot_mix0_2_mix_attachment_threshold_0_mix_draw_order_threshold_0_interrupt_to_portal_t0_3_matches_cpp()
+ {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.skel"));
+
+    let mut state_data = AnimationStateData::new(data.clone());
+    state_data
+        .set_mix("aim", "shoot", 0.2)
+        .expect("set mix aim->shoot");
+    state_data
+        .set_mix("shoot", "portal", 0.2)
+        .expect("set mix shoot->portal");
+
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(state_data);
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "run", true).expect("set run");
+    step(&mut state, &mut skeleton, 0.1);
+
+    let shoot_add = state.set_animation(1, "shoot", false).expect("set shoot");
+    shoot_add.set_mix_blend(&mut state, crate::MixBlend::Add);
+    shoot_add.set_alpha(&mut state, 0.5);
+    step(&mut state, &mut skeleton, 0.05);
+
+    state.set_animation(2, "aim", true).expect("set aim 2");
+    step(&mut state, &mut skeleton, 0.05);
+
+    let shoot = state.set_animation(2, "shoot", false).expect("set shoot 2");
+    shoot.set_mix_attachment_threshold(&mut state, 0.0);
+    shoot.set_mix_draw_order_threshold(&mut state, 0.0);
+    step(&mut state, &mut skeleton, 0.05);
+
+    state.set_animation(2, "portal", false).expect("set portal");
+    step(&mut state, &mut skeleton, 0.05);
+
+    let rust = dump_pose(&skeleton, 0.3, Some("gun"));
+    let cpp = read_pose(&golden_skel_path(
+        "spineboy_run_t1_shoot_add_alpha0_5_t2_aim_to_shoot_mix0_2_mixAttachmentThreshold_0_mixDrawOrderThreshold_0_interrupt_to_portal_t0_3.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+fn oracle_spineboy_run_t1_shoot_add_alpha0_5_t2_aim_to_shoot_mix0_2_mix_attachment_threshold_1_mix_draw_order_threshold_1_interrupt_to_portal_t0_3_matches_cpp()
+ {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.json"));
+
+    let mut state_data = AnimationStateData::new(data.clone());
+    state_data
+        .set_mix("aim", "shoot", 0.2)
+        .expect("set mix aim->shoot");
+    state_data
+        .set_mix("shoot", "portal", 0.2)
+        .expect("set mix shoot->portal");
+
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(state_data);
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "run", true).expect("set run");
+    step(&mut state, &mut skeleton, 0.1);
+
+    let shoot_add = state.set_animation(1, "shoot", false).expect("set shoot");
+    shoot_add.set_mix_blend(&mut state, crate::MixBlend::Add);
+    shoot_add.set_alpha(&mut state, 0.5);
+    step(&mut state, &mut skeleton, 0.05);
+
+    state.set_animation(2, "aim", true).expect("set aim 2");
+    step(&mut state, &mut skeleton, 0.05);
+
+    let shoot = state.set_animation(2, "shoot", false).expect("set shoot 2");
+    shoot.set_mix_attachment_threshold(&mut state, 1.0);
+    shoot.set_mix_draw_order_threshold(&mut state, 1.0);
+    step(&mut state, &mut skeleton, 0.05);
+
+    state.set_animation(2, "portal", false).expect("set portal");
+    step(&mut state, &mut skeleton, 0.05);
+
+    let rust = dump_pose(&skeleton, 0.3, Some("gun"));
+    let cpp = read_pose(&golden_path(
+        "spineboy_run_t1_shoot_add_alpha0_5_t2_aim_to_shoot_mix0_2_mixAttachmentThreshold_1_mixDrawOrderThreshold_1_interrupt_to_portal_t0_3.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_spineboy_run_t1_shoot_add_alpha0_5_t2_aim_to_shoot_mix0_2_mix_attachment_threshold_1_mix_draw_order_threshold_1_interrupt_to_portal_t0_3_matches_cpp()
+ {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.skel"));
+
+    let mut state_data = AnimationStateData::new(data.clone());
+    state_data
+        .set_mix("aim", "shoot", 0.2)
+        .expect("set mix aim->shoot");
+    state_data
+        .set_mix("shoot", "portal", 0.2)
+        .expect("set mix shoot->portal");
+
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(state_data);
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "run", true).expect("set run");
+    step(&mut state, &mut skeleton, 0.1);
+
+    let shoot_add = state.set_animation(1, "shoot", false).expect("set shoot");
+    shoot_add.set_mix_blend(&mut state, crate::MixBlend::Add);
+    shoot_add.set_alpha(&mut state, 0.5);
+    step(&mut state, &mut skeleton, 0.05);
+
+    state.set_animation(2, "aim", true).expect("set aim 2");
+    step(&mut state, &mut skeleton, 0.05);
+
+    let shoot = state.set_animation(2, "shoot", false).expect("set shoot 2");
+    shoot.set_mix_attachment_threshold(&mut state, 1.0);
+    shoot.set_mix_draw_order_threshold(&mut state, 1.0);
+    step(&mut state, &mut skeleton, 0.05);
+
+    state.set_animation(2, "portal", false).expect("set portal");
+    step(&mut state, &mut skeleton, 0.05);
+
+    let rust = dump_pose(&skeleton, 0.3, Some("gun"));
+    let cpp = read_pose(&golden_skel_path(
+        "spineboy_run_t1_shoot_add_alpha0_5_t2_aim_to_shoot_mix0_2_mixAttachmentThreshold_1_mixDrawOrderThreshold_1_interrupt_to_portal_t0_3.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+fn oracle_alien_run_plus_death_add_to_empty_immediate_mix0_2_t0_1_matches_cpp() {
+    let data = load_data(&example_json_path("alien/export/alien-pro.json"));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "run", true).expect("set run");
+
+    let death = state.set_animation(1, "death", false).expect("set death");
+    death.set_mix_blend(&mut state, crate::MixBlend::Add);
+
+    // Critical edge case: immediately mix out before the Add entry is ever applied.
+    state
+        .set_empty_animation(1, 0.2)
+        .expect("set empty animation");
+
+    let dt = 0.1;
+    step(&mut state, &mut skeleton, dt);
+
+    let rust = dump_pose(&skeleton, dt, None);
+    let cpp = read_pose(&golden_path(
+        "alien_run_plus_death_add_to_empty_immediate_mix0_2_t0_1.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
 #[cfg(all(feature = "binary", feature = "upstream-smoke"))]
 fn oracle_skel_spineboy_run_plus_aim_add_t0_2_matches_cpp() {
     let data = load_data(&example_json_path("spineboy/export/spineboy-pro.skel"));
@@ -3684,6 +5704,73 @@ fn oracle_skel_spineboy_run_plus_aim_add_t0_2_matches_cpp() {
 
     let rust = dump_pose(&skeleton, 0.2, None);
     let cpp = read_pose(&golden_skel_path("spineboy_run_plus_aim_add_t0_2.json"));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_spineboy_run_plus_aim_add_to_empty_immediate_mix0_2_t0_1_matches_cpp() {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.skel"));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "run", true).expect("set run");
+
+    let aim = state.set_animation(1, "aim", true).expect("set aim");
+    aim.set_mix_blend(&mut state, crate::MixBlend::Add);
+
+    state
+        .set_empty_animation(1, 0.2)
+        .expect("set empty animation");
+
+    let dt = 0.1;
+    step(&mut state, &mut skeleton, dt);
+
+    let rust = dump_pose(&skeleton, dt, None);
+    let cpp = read_pose(&golden_skel_path(
+        "spineboy_run_plus_aim_add_to_empty_immediate_mix0_2_t0_1.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_spineboy_aim_add_holdprev_queue_shoot_add_to_empty_mix0_2_t0_1_matches_cpp() {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.skel"));
+
+    let mut state_data = AnimationStateData::new(data.clone());
+    state_data
+        .set_mix("aim", "shoot", 0.2)
+        .expect("set mix aim->shoot");
+
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(state_data);
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "run", true).expect("set run");
+
+    let aim = state.set_animation(1, "aim", true).expect("set aim");
+    aim.set_mix_blend(&mut state, crate::MixBlend::Add);
+    aim.set_hold_previous(&mut state, true);
+
+    let shoot = state
+        .add_animation(1, "shoot", false, 0.0)
+        .expect("add shoot");
+    shoot.set_mix_blend(&mut state, crate::MixBlend::Add);
+    shoot.set_hold_previous(&mut state, true);
+
+    step(&mut state, &mut skeleton, 0.05);
+
+    state
+        .set_empty_animation(1, 0.2)
+        .expect("set empty animation");
+    step(&mut state, &mut skeleton, 0.05);
+
+    let rust = dump_pose(&skeleton, 0.1, None);
+    let cpp = read_pose(&golden_skel_path(
+        "spineboy_aim_add_holdprev_queue_shoot_add_to_empty_mix0_2_t0_1.json",
+    ));
     assert_pose_parity(&rust, &cpp, 1.0e-3);
 }
 
@@ -3756,6 +5843,386 @@ fn oracle_skel_spineboy_run_plus_portal_add_to_empty_mix0_2_jitter_dt_t0_6_match
     let rust = dump_pose(&skeleton, 0.6, None);
     let cpp = read_pose(&golden_skel_path(
         "spineboy_run_plus_portal_add_to_empty_mix0_2_jitter_dt_t0_6.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_spineboy_run_plus_portal_add_reverse_t0_35_matches_cpp() {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.skel"));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "run", true).expect("set run");
+    step(&mut state, &mut skeleton, 0.0);
+
+    let portal = state.set_animation(1, "portal", false).expect("set portal");
+    portal.set_mix_blend(&mut state, crate::MixBlend::Add);
+    portal.set_reverse(&mut state, true);
+
+    let dt = 0.35;
+    step(&mut state, &mut skeleton, dt);
+
+    let rust = dump_pose(&skeleton, dt, None);
+    let cpp = read_pose(&golden_skel_path(
+        "spineboy_run_plus_portal_add_reverse_t0_35.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_spineboy_run_plus_portal_add_reverse_to_empty_immediate_mix0_2_t0_1_matches_cpp() {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.skel"));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "run", true).expect("set run");
+
+    let portal = state.set_animation(1, "portal", false).expect("set portal");
+    portal.set_mix_blend(&mut state, crate::MixBlend::Add);
+    portal.set_reverse(&mut state, true);
+
+    state
+        .set_empty_animation(1, 0.2)
+        .expect("set empty animation");
+
+    let dt = 0.1;
+    step(&mut state, &mut skeleton, dt);
+
+    let rust = dump_pose(&skeleton, dt, None);
+    let cpp = read_pose(&golden_skel_path(
+        "spineboy_run_plus_portal_add_reverse_to_empty_immediate_mix0_2_t0_1.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_spineboy_portal_reverse_t0_5_matches_cpp() {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.skel"));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    let portal = state.set_animation(0, "portal", false).expect("set portal");
+    portal.set_reverse(&mut state, true);
+
+    let dt = 0.5;
+    step(&mut state, &mut skeleton, dt);
+
+    let rust = dump_pose(&skeleton, dt, None);
+    let cpp = read_pose(&golden_skel_path("spineboy_portal_reverse_t0_5.json"));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_spineboy_portal_alpha0_5_shortest_rotation_true_t2_0_matches_cpp() {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.skel"));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    let portal = state.set_animation(0, "portal", false).expect("set portal");
+    portal.set_alpha(&mut state, 0.5);
+    portal.set_shortest_rotation(&mut state, true);
+
+    let dt = 2.0;
+    step(&mut state, &mut skeleton, dt);
+
+    let rust = dump_pose(&skeleton, dt, None);
+    let cpp = read_pose(&golden_skel_path(
+        "spineboy_portal_alpha0_5_shortestRotation_true_t2_0.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_spineboy_run_to_portal_reverse_mix0_2_t0_1_matches_cpp() {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.skel"));
+
+    let mut state_data = AnimationStateData::new(data.clone());
+    state_data
+        .set_mix("run", "portal", 0.2)
+        .expect("set mix run->portal");
+
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(state_data);
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "run", true).expect("set run");
+    step(&mut state, &mut skeleton, 0.0);
+
+    let portal = state.set_animation(0, "portal", false).expect("set portal");
+    portal.set_reverse(&mut state, true);
+
+    let dt = 0.1;
+    step(&mut state, &mut skeleton, dt);
+
+    let rust = dump_pose(&skeleton, dt, None);
+    let cpp = read_pose(&golden_skel_path(
+        "spineboy_run_to_portal_reverse_mix0_2_t0_1.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_spineboy_run_to_portal_mix0_2_shortest_rotation_true_t0_1_matches_cpp() {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.skel"));
+
+    let mut state_data = AnimationStateData::new(data.clone());
+    state_data
+        .set_mix("run", "portal", 0.2)
+        .expect("set mix run->portal");
+
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(state_data);
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "run", true).expect("set run");
+    step(&mut state, &mut skeleton, 0.0);
+
+    let portal = state.set_animation(0, "portal", false).expect("set portal");
+    portal.set_shortest_rotation(&mut state, true);
+
+    let dt = 0.1;
+    step(&mut state, &mut skeleton, dt);
+
+    let rust = dump_pose(&skeleton, dt, None);
+    let cpp = read_pose(&golden_skel_path(
+        "spineboy_run_to_portal_mix0_2_shortestRotation_true_t0_1.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_spineboy_portal_reverse_to_shoot_mix0_2_t0_1_matches_cpp() {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.skel"));
+
+    let mut state_data = AnimationStateData::new(data.clone());
+    state_data
+        .set_mix("portal", "shoot", 0.2)
+        .expect("set mix portal->shoot");
+
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(state_data);
+
+    skeleton.set_to_setup_pose();
+    let portal = state.set_animation(0, "portal", false).expect("set portal");
+    portal.set_reverse(&mut state, true);
+    step(&mut state, &mut skeleton, 0.05);
+
+    state.set_animation(0, "shoot", false).expect("set shoot");
+    step(&mut state, &mut skeleton, 0.05);
+
+    let rust = dump_pose(&skeleton, 0.1, None);
+    let cpp = read_pose(&golden_skel_path(
+        "spineboy_portal_reverse_to_shoot_mix0_2_t0_1.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_spineboy_portal_shortest_rotation_true_to_shoot_mix0_2_t0_1_matches_cpp() {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.skel"));
+
+    let mut state_data = AnimationStateData::new(data.clone());
+    state_data
+        .set_mix("portal", "shoot", 0.2)
+        .expect("set mix portal->shoot");
+
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(state_data);
+
+    skeleton.set_to_setup_pose();
+    let portal = state.set_animation(0, "portal", false).expect("set portal");
+    portal.set_shortest_rotation(&mut state, true);
+    step(&mut state, &mut skeleton, 0.05);
+
+    state.set_animation(0, "shoot", false).expect("set shoot");
+    step(&mut state, &mut skeleton, 0.05);
+
+    let rust = dump_pose(&skeleton, 0.1, None);
+    let cpp = read_pose(&golden_skel_path(
+        "spineboy_portal_shortestRotation_true_to_shoot_mix0_2_t0_1.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_spineboy_portal_alpha0_5_reset_rotation_directions_t0_4_matches_cpp() {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.skel"));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    let portal = state.set_animation(0, "portal", false).expect("set portal");
+    portal.set_alpha(&mut state, 0.5);
+
+    step(&mut state, &mut skeleton, 0.2);
+    portal.reset_rotation_directions(&mut state);
+    step(&mut state, &mut skeleton, 0.2);
+
+    let rust = dump_pose(&skeleton, 0.4, None);
+    let cpp = read_pose(&golden_skel_path(
+        "spineboy_portal_alpha0_5_reset_rotation_directions_t0_4.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_spineboy_portal_add_reverse_to_shoot_replace_mix0_2_t0_1_matches_cpp() {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.skel"));
+
+    let mut state_data = AnimationStateData::new(data.clone());
+    state_data
+        .set_mix("portal", "shoot", 0.2)
+        .expect("set mix portal->shoot");
+
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(state_data);
+
+    skeleton.set_to_setup_pose();
+    let portal = state.set_animation(0, "portal", false).expect("set portal");
+    portal.set_mix_blend(&mut state, crate::MixBlend::Add);
+    portal.set_reverse(&mut state, true);
+    step(&mut state, &mut skeleton, 0.05);
+
+    state.set_animation(0, "shoot", false).expect("set shoot");
+    step(&mut state, &mut skeleton, 0.05);
+
+    let rust = dump_pose(&skeleton, 0.1, None);
+    let cpp = read_pose(&golden_skel_path(
+        "spineboy_portal_add_reverse_to_shoot_replace_mix0_2_t0_1.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_spineboy_holdprev_chain_aim_add_shortest_rotation_true_shoot_add_reverse_to_portal_replace_t0_2_matches_cpp()
+ {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.skel"));
+
+    let mut state_data = AnimationStateData::new(data.clone());
+    state_data
+        .set_mix("aim", "shoot", 0.2)
+        .expect("set mix aim->shoot");
+    state_data
+        .set_mix("shoot", "portal", 0.2)
+        .expect("set mix shoot->portal");
+
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(state_data);
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "run", true).expect("set run");
+
+    let aim = state.set_animation(1, "aim", true).expect("set aim");
+    aim.set_mix_blend(&mut state, crate::MixBlend::Add);
+    aim.set_hold_previous(&mut state, true);
+    aim.set_shortest_rotation(&mut state, true);
+    step(&mut state, &mut skeleton, 0.1);
+
+    let shoot = state.set_animation(1, "shoot", false).expect("set shoot");
+    shoot.set_mix_blend(&mut state, crate::MixBlend::Add);
+    shoot.set_hold_previous(&mut state, true);
+    shoot.set_reverse(&mut state, true);
+    step(&mut state, &mut skeleton, 0.05);
+
+    state.set_animation(1, "portal", true).expect("set portal");
+    step(&mut state, &mut skeleton, 0.05);
+
+    let rust = dump_pose(&skeleton, 0.2, None);
+    let cpp = read_pose(&golden_skel_path(
+        "spineboy_holdprev_chain_aim_add_shortestRotation_true_shoot_add_reverse_to_portal_replace_t0_2.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_spineboy_holdprev_chain_aim_add_to_shoot_replace_to_portal_add_reverse_to_death_replace_t0_25_matches_cpp()
+ {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.skel"));
+
+    let mut state_data = AnimationStateData::new(data.clone());
+    state_data
+        .set_mix("aim", "shoot", 0.2)
+        .expect("set mix aim->shoot");
+    state_data
+        .set_mix("shoot", "portal", 0.2)
+        .expect("set mix shoot->portal");
+    state_data
+        .set_mix("portal", "death", 0.2)
+        .expect("set mix portal->death");
+
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(state_data);
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "run", true).expect("set run");
+
+    let aim = state.set_animation(1, "aim", true).expect("set aim");
+    aim.set_mix_blend(&mut state, crate::MixBlend::Add);
+    aim.set_hold_previous(&mut state, true);
+    step(&mut state, &mut skeleton, 0.05);
+
+    let shoot = state.set_animation(1, "shoot", false).expect("set shoot");
+    shoot.set_hold_previous(&mut state, true);
+    step(&mut state, &mut skeleton, 0.05);
+
+    let portal = state.set_animation(1, "portal", false).expect("set portal");
+    portal.set_mix_blend(&mut state, crate::MixBlend::Add);
+    portal.set_reverse(&mut state, true);
+    portal.set_hold_previous(&mut state, true);
+    step(&mut state, &mut skeleton, 0.05);
+
+    let death = state.set_animation(1, "death", false).expect("set death");
+    death.set_shortest_rotation(&mut state, true);
+    death.set_alpha(&mut state, 0.5);
+    step(&mut state, &mut skeleton, 0.1);
+
+    let rust = dump_pose(&skeleton, 0.25, None);
+    let cpp = read_pose(&golden_skel_path(
+        "spineboy_holdprev_chain_aim_add_to_shoot_replace_to_portal_add_reverse_to_death_replace_t0_25.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_alien_run_plus_death_add_to_empty_immediate_mix0_2_t0_1_matches_cpp() {
+    let data = load_data(&example_json_path("alien/export/alien-pro.skel"));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "run", true).expect("set run");
+
+    let death = state.set_animation(1, "death", false).expect("set death");
+    death.set_mix_blend(&mut state, crate::MixBlend::Add);
+
+    state
+        .set_empty_animation(1, 0.2)
+        .expect("set empty animation");
+
+    let dt = 0.1;
+    step(&mut state, &mut skeleton, dt);
+
+    let rust = dump_pose(&skeleton, dt, None);
+    let cpp = read_pose(&golden_skel_path(
+        "alien_run_plus_death_add_to_empty_immediate_mix0_2_t0_1.json",
     ));
     assert_pose_parity(&rust, &cpp, 1.0e-3);
 }
@@ -4109,6 +6576,47 @@ fn oracle_spineboy_aim_to_shoot_add_holdprev_t0_4_matches_cpp() {
 }
 
 #[test]
+fn oracle_spineboy_aim_add_holdprev_queue_shoot_add_to_empty_mix0_2_t0_1_matches_cpp() {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-pro.json"));
+
+    let mut state_data = AnimationStateData::new(data.clone());
+    state_data
+        .set_mix("aim", "shoot", 0.2)
+        .expect("set mix aim->shoot");
+
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(state_data);
+
+    skeleton.set_to_setup_pose();
+    state.set_animation(0, "run", true).expect("set run");
+
+    let aim = state.set_animation(1, "aim", true).expect("set aim");
+    aim.set_mix_blend(&mut state, crate::MixBlend::Add);
+    aim.set_hold_previous(&mut state, true);
+
+    // Queue another Add entry, but do not let it start.
+    let shoot = state
+        .add_animation(1, "shoot", false, 0.0)
+        .expect("add shoot");
+    shoot.set_mix_blend(&mut state, crate::MixBlend::Add);
+    shoot.set_hold_previous(&mut state, true);
+
+    step(&mut state, &mut skeleton, 0.05);
+
+    // Mix out while a queued entry still exists. This locks queue disposal + mixingFrom semantics.
+    state
+        .set_empty_animation(1, 0.2)
+        .expect("set empty animation");
+    step(&mut state, &mut skeleton, 0.05);
+
+    let rust = dump_pose(&skeleton, 0.1, None);
+    let cpp = read_pose(&golden_path(
+        "spineboy_aim_add_holdprev_queue_shoot_add_to_empty_mix0_2_t0_1.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
 fn oracle_spineboy_aim_add_to_shoot_replace_t0_4_matches_cpp() {
     let path = example_json_path("spineboy/export/spineboy-pro.json");
     let json = std::fs::read_to_string(&path).expect("read spineboy-pro.json");
@@ -4262,6 +6770,59 @@ fn oracle_spineboy_shoot_to_empty_mix_attachment_threshold_0_mix_draw_order_thre
     let rust = dump_pose(&skeleton, 0.2, None);
     let cpp = read_pose(&golden_path(
         "spineboy_shoot_to_empty_mixAttachmentThreshold_0_mixDrawOrderThreshold_0_t0_2.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+fn oracle_spineboy_ess_run_to_empty_immediate_mix0_2_mix_attachment_threshold_1_mix_draw_order_threshold_1_t0_1_matches_cpp()
+ {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-ess.json"));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+
+    // Force attachment + drawOrder timelines to apply during mixingFrom.
+    let run = state.set_animation(0, "run", true).expect("set run");
+    run.set_mix_attachment_threshold(&mut state, 1.0);
+    run.set_mix_draw_order_threshold(&mut state, 1.0);
+
+    // Critical edge case: immediately mix out before the entry is ever applied.
+    state
+        .set_empty_animation(0, 0.2)
+        .expect("set empty animation");
+    step(&mut state, &mut skeleton, 0.1);
+
+    let rust = dump_pose(&skeleton, 0.1, None);
+    let cpp = read_pose(&golden_path(
+        "spineboy_ess_run_to_empty_immediate_mix0_2_mixAttachmentThreshold_1_mixDrawOrderThreshold_1_t0_1.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_spineboy_ess_run_to_empty_immediate_mix0_2_mix_attachment_threshold_1_mix_draw_order_threshold_1_t0_1_matches_cpp()
+ {
+    let data = load_data(&example_json_path("spineboy/export/spineboy-ess.skel"));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+
+    let run = state.set_animation(0, "run", true).expect("set run");
+    run.set_mix_attachment_threshold(&mut state, 1.0);
+    run.set_mix_draw_order_threshold(&mut state, 1.0);
+
+    state
+        .set_empty_animation(0, 0.2)
+        .expect("set empty animation");
+    step(&mut state, &mut skeleton, 0.1);
+
+    let rust = dump_pose(&skeleton, 0.1, None);
+    let cpp = read_pose(&golden_skel_path(
+        "spineboy_ess_run_to_empty_immediate_mix0_2_mixAttachmentThreshold_1_mixDrawOrderThreshold_1_t0_1.json",
     ));
     assert_pose_parity(&rust, &cpp, 1.0e-3);
 }
@@ -4815,6 +7376,121 @@ fn oracle_celestial_circus_wind_idle_physics_t0_5_matches_cpp() {
 }
 
 #[test]
+fn oracle_celestial_circus_wind_idle_physics_jitter_dt_t1_0_matches_cpp() {
+    let data = load_data(&example_json_path(
+        "celestial-circus/export/celestial-circus-pro.json",
+    ));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    state
+        .set_animation(0, "wind-idle", true)
+        .expect("set wind-idle");
+
+    for _ in 0..10 {
+        step_physics(&mut state, &mut skeleton, 0.008_333_334);
+    }
+    for _ in 0..10 {
+        step_physics(&mut state, &mut skeleton, 0.033_333_336);
+    }
+    for _ in 0..35 {
+        step_physics(&mut state, &mut skeleton, 0.016_666_668);
+    }
+
+    let rust = dump_pose(&skeleton, skeleton.time(), None);
+    let cpp = read_pose(&golden_path(
+        "celestial_circus_wind_idle_physics_jitter_dt_t1_0.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+fn oracle_celestial_circus_wind_idle_physics_update_pose_update_t1_0_matches_cpp() {
+    let data = load_data(&example_json_path(
+        "celestial-circus/export/celestial-circus-pro.json",
+    ));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    state
+        .set_animation(0, "wind-idle", true)
+        .expect("set wind-idle");
+
+    let dt = 1.0 / 60.0;
+    for _ in 0..30 {
+        step_with_physics(&mut state, &mut skeleton, dt, crate::Physics::Update);
+    }
+    for _ in 0..15 {
+        step_with_physics(&mut state, &mut skeleton, dt, crate::Physics::Pose);
+    }
+    for _ in 0..15 {
+        step_with_physics(&mut state, &mut skeleton, dt, crate::Physics::Update);
+    }
+
+    let rust = dump_pose(&skeleton, skeleton.time(), None);
+    let cpp = read_pose(&golden_path(
+        "celestial_circus_wind_idle_physics_update_pose_update_t1_0.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+fn oracle_celestial_circus_wind_idle_physics_update_reset_update_t1_0_matches_cpp() {
+    let data = load_data(&example_json_path(
+        "celestial-circus/export/celestial-circus-pro.json",
+    ));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    state
+        .set_animation(0, "wind-idle", true)
+        .expect("set wind-idle");
+
+    let dt = 1.0 / 60.0;
+    for _ in 0..30 {
+        step_with_physics(&mut state, &mut skeleton, dt, crate::Physics::Update);
+    }
+    step_with_physics(&mut state, &mut skeleton, 0.0, crate::Physics::Reset);
+    for _ in 0..30 {
+        step_with_physics(&mut state, &mut skeleton, dt, crate::Physics::Update);
+    }
+
+    let rust = dump_pose(&skeleton, skeleton.time(), None);
+    let cpp = read_pose(&golden_path(
+        "celestial_circus_wind_idle_physics_update_reset_update_t1_0.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+fn oracle_celestial_circus_wind_idle_physics_t10_0_matches_cpp() {
+    let data = load_data(&example_json_path(
+        "celestial-circus/export/celestial-circus-pro.json",
+    ));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    state
+        .set_animation(0, "wind-idle", true)
+        .expect("set wind-idle");
+
+    let dt = 1.0 / 60.0;
+    for _ in 0..600 {
+        step_physics(&mut state, &mut skeleton, dt);
+    }
+
+    let rust = dump_pose(&skeleton, skeleton.time(), None);
+    let cpp = read_pose(&golden_path(
+        "celestial_circus_wind_idle_physics_t10_0.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
 fn oracle_snowglobe_idle_physics_t0_5_matches_cpp() {
     let data = load_data(&example_json_path("snowglobe/export/snowglobe-pro.json"));
     let mut skeleton = Skeleton::new(data.clone());
@@ -5252,6 +7928,125 @@ fn oracle_skel_celestial_circus_wind_idle_physics_t0_5_matches_cpp() {
     let rust = dump_pose(&skeleton, skeleton.time(), None);
     let cpp = read_pose(&golden_skel_path(
         "celestial_circus_wind_idle_physics_t0_5.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_celestial_circus_wind_idle_physics_jitter_dt_t1_0_matches_cpp() {
+    let data = load_data(&example_json_path(
+        "celestial-circus/export/celestial-circus-pro.skel",
+    ));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    state
+        .set_animation(0, "wind-idle", true)
+        .expect("set wind-idle");
+
+    for _ in 0..10 {
+        step_physics(&mut state, &mut skeleton, 0.008_333_334);
+    }
+    for _ in 0..10 {
+        step_physics(&mut state, &mut skeleton, 0.033_333_336);
+    }
+    for _ in 0..35 {
+        step_physics(&mut state, &mut skeleton, 0.016_666_668);
+    }
+
+    let rust = dump_pose(&skeleton, skeleton.time(), None);
+    let cpp = read_pose(&golden_skel_path(
+        "celestial_circus_wind_idle_physics_jitter_dt_t1_0.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_celestial_circus_wind_idle_physics_update_pose_update_t1_0_matches_cpp() {
+    let data = load_data(&example_json_path(
+        "celestial-circus/export/celestial-circus-pro.skel",
+    ));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    state
+        .set_animation(0, "wind-idle", true)
+        .expect("set wind-idle");
+
+    let dt = 1.0 / 60.0;
+    for _ in 0..30 {
+        step_with_physics(&mut state, &mut skeleton, dt, crate::Physics::Update);
+    }
+    for _ in 0..15 {
+        step_with_physics(&mut state, &mut skeleton, dt, crate::Physics::Pose);
+    }
+    for _ in 0..15 {
+        step_with_physics(&mut state, &mut skeleton, dt, crate::Physics::Update);
+    }
+
+    let rust = dump_pose(&skeleton, skeleton.time(), None);
+    let cpp = read_pose(&golden_skel_path(
+        "celestial_circus_wind_idle_physics_update_pose_update_t1_0.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_celestial_circus_wind_idle_physics_update_reset_update_t1_0_matches_cpp() {
+    let data = load_data(&example_json_path(
+        "celestial-circus/export/celestial-circus-pro.skel",
+    ));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    state
+        .set_animation(0, "wind-idle", true)
+        .expect("set wind-idle");
+
+    let dt = 1.0 / 60.0;
+    for _ in 0..30 {
+        step_with_physics(&mut state, &mut skeleton, dt, crate::Physics::Update);
+    }
+    step_with_physics(&mut state, &mut skeleton, 0.0, crate::Physics::Reset);
+    for _ in 0..30 {
+        step_with_physics(&mut state, &mut skeleton, dt, crate::Physics::Update);
+    }
+
+    let rust = dump_pose(&skeleton, skeleton.time(), None);
+    let cpp = read_pose(&golden_skel_path(
+        "celestial_circus_wind_idle_physics_update_reset_update_t1_0.json",
+    ));
+    assert_pose_parity(&rust, &cpp, 1.0e-3);
+}
+
+#[test]
+#[cfg(all(feature = "binary", feature = "upstream-smoke"))]
+fn oracle_skel_celestial_circus_wind_idle_physics_t10_0_matches_cpp() {
+    let data = load_data(&example_json_path(
+        "celestial-circus/export/celestial-circus-pro.skel",
+    ));
+    let mut skeleton = Skeleton::new(data.clone());
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    skeleton.set_to_setup_pose();
+    state
+        .set_animation(0, "wind-idle", true)
+        .expect("set wind-idle");
+
+    let dt = 1.0 / 60.0;
+    for _ in 0..600 {
+        step_physics(&mut state, &mut skeleton, dt);
+    }
+
+    let rust = dump_pose(&skeleton, skeleton.time(), None);
+    let cpp = read_pose(&golden_skel_path(
+        "celestial_circus_wind_idle_physics_t10_0.json",
     ));
     assert_pose_parity(&rust, &cpp, 1.0e-3);
 }

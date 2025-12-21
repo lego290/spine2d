@@ -126,7 +126,7 @@ impl ApplicationHandler for App {
         for y in 0..h {
             for x in 0..w {
                 let i = ((y * w + x) * 4) as usize;
-                pixels[i + 0] = (x * 255 / (w - 1)) as u8;
+                pixels[i] = (x * 255 / (w - 1)) as u8;
                 pixels[i + 1] = (y * 255 / (h - 1)) as u8;
                 pixels[i + 2] = 200;
                 pixels[i + 3] = 255;

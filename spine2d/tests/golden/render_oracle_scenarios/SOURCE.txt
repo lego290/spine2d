@@ -1,9 +1,10 @@
 Source: https://github.com/EsotericSoftware/spine-runtimes
 Branch: 4.3-beta
 TargetCommit: d050ae66829ed5e46bb38690c83f792ffc2b3d8b
-RecordedAtUTC: 2025-12-20T14:40:12Z
+RecordedAtUTC: 2025-12-21T14:57:25Z
 Format: json
 Status: OK
 Notes:
   These files are render-dump goldens produced by the C++ render oracle.
+  Both legacy (--anim/--time) and scenario (--set/--step) cases may be present.
   Re-record when the upstream baseline commit changes.

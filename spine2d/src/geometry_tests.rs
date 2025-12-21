@@ -10,7 +10,7 @@ fn assert_approx(actual: f32, expected: f32) {
 
 #[test]
 fn triangulator_matches_spine_c_unit_test_rectangle() {
-    let triangulator = Triangulator::default();
+    let triangulator = Triangulator;
 
     let polygon = vec![0.0, 0.0, 100.0, 0.0, 100.0, 100.0, 0.0, 100.0];
     let triangles = triangulator.triangulate(&polygon);
@@ -46,7 +46,7 @@ fn skeleton_clipper_clip_triangles_matches_spine_c_unit_test() {
         clipper.clip_triangles(&vertices, &indices, &uvs, 2);
 
     let expected_vertices = vec![
-        83.333328, 50.0, 76.666664, 70.0, 23.333334, 70.0, 16.666672, 50.0,
+        83.333_33, 50.0, 76.666_664, 70.0, 23.333_334, 70.0, 16.666_672, 50.0,
     ];
     assert_eq!(clipped_vertices.len(), expected_vertices.len());
     for (actual, expected) in clipped_vertices.iter().copied().zip(expected_vertices) {

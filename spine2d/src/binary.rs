@@ -2933,7 +2933,7 @@ mod tests {
     fn push_string(out: &mut Vec<u8>, s: Option<&str>) {
         match s {
             None => push_varint(out, 0),
-            Some(s) if s.is_empty() => push_varint(out, 1),
+            Some("") => push_varint(out, 1),
             Some(s) => {
                 let bytes = s.as_bytes();
                 push_varint(out, (bytes.len() as u32) + 1);

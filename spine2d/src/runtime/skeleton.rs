@@ -94,6 +94,29 @@ impl Bone {
     pub fn parent_index(&self) -> Option<usize> {
         self.parent
     }
+
+    /// Transforms a point from world coordinates into this bone's local coordinates.
+    ///
+    /// Mirrors the official runtimes' `Bone.worldToLocal`.
+    pub fn world_to_local(&self, world_x: f32, world_y: f32) -> (f32, f32) {
+        let det = self.a * self.d - self.b * self.c;
+        let x = world_x - self.world_x;
+        let y = world_y - self.world_y;
+        (
+            (x * self.d - y * self.b) / det,
+            (y * self.a - x * self.c) / det,
+        )
+    }
+
+    /// Transforms a point from this bone's local coordinates into world coordinates.
+    ///
+    /// Mirrors the official runtimes' `Bone.localToWorld`.
+    pub fn local_to_world(&self, local_x: f32, local_y: f32) -> (f32, f32) {
+        (
+            local_x * self.a + local_y * self.b + self.world_x,
+            local_x * self.c + local_y * self.d + self.world_y,
+        )
+    }
 }
 
 #[derive(Clone, Debug)]

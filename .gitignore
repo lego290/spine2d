@@ -7,6 +7,7 @@
 /third_party/spine-runtimes/examples/
 /third_party/spine-runtimes/SOURCE.txt
 /third_party/spine-runtimes/LICENSE.spine-runtimes.txt
+/third_party/spine-runtimes/
 
 # Trunk build outputs (large, generated)
 /spine2d-web/dist/

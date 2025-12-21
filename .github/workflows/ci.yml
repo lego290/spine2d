@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [main, master, develop]
   pull_request:
-    branches: [ main ]
+    branches: [main, master]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -15,7 +15,7 @@ env:
 
 jobs:
   test:
-    name: Test (core)
+    name: Test / Lint / Fmt
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -26,41 +26,24 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Cache
+      - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
-
-      # NOTE: CI intentionally does not run the upstream oracle (`upstream-smoke`).
-      # That feature requires fetching/compiling upstream `spine-runtimes` sources and assets.
-      - name: Run tests (spine2d)
-        run: cargo test -p spine2d --features json,binary
-
-      - name: Build (spine2d-wgpu)
-        run: cargo build -p spine2d-wgpu --features json
 
       - name: Check formatting
         run: cargo fmt --all -- --check
 
       - name: Clippy (spine2d)
-        run: cargo clippy -p spine2d --features json,binary -- -D warnings
+        run: cargo clippy -p spine2d --all-targets --features json,binary,glam -- -D warnings
 
       - name: Clippy (spine2d-wgpu)
-        run: cargo clippy -p spine2d-wgpu --features json -- -D warnings
+        run: cargo clippy -p spine2d-wgpu --all-targets --features json -- -D warnings
 
-  wasm:
-    name: Build (wasm)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Clippy (spine2d-web)
+        run: cargo clippy -p spine2d-web --all-targets -- -D warnings
 
-      - name: Install Rust (wasm)
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
+      - name: Test (no features)
+        run: cargo test -p spine2d
 
-      - name: Cache
-        uses: Swatinem/rust-cache@v2
-
-      - name: Cargo check (spine2d-web)
-        run: cargo check -p spine2d-web --target wasm32-unknown-unknown
+      - name: Test (parsing/runtime features)
+        run: cargo test -p spine2d --features json,binary,glam
 

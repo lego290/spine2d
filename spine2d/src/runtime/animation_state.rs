@@ -995,59 +995,51 @@ impl AnimationState {
         let mut interrupt_previous = true;
         let mut dispose_old_immediately = false;
         if let Some(old) = old_current {
-            if self
+            let old_is_unapplied = self
                 .entry(old)
-                .is_some_and(|entry| entry.next_track_last_time < 0.0)
-            {
+                .is_some_and(|entry| entry.next_track_last_time < 0.0);
+            let old_is_same_animation = self
+                .entry(old)
+                .is_some_and(|entry| entry.animation_index == animation_index);
+
+            // Match spine-cpp:
+            // - Only skip mixing from an unapplied entry when setting the same animation again.
+            // - Otherwise, an entry is mixed from even if it was never applied yet.
+            if old_is_unapplied && old_is_same_animation {
                 dispose_old_immediately = true;
-                let base = self.entry(old).and_then(|entry| entry.mixing_from);
-                if let Some(base) = base {
-                    previous_for_mix = Some(base);
-                    interrupt_previous = false;
-                } else {
-                    previous_for_mix = None;
-                }
+                previous_for_mix = self.entry(old).and_then(|entry| entry.mixing_from);
+                interrupt_previous = false;
             }
         }
 
         if let Some(previous) = previous_for_mix {
-            let previous_applied = self
-                .entry(previous)
-                .is_some_and(|entry| entry.next_track_last_time >= 0.0);
             let previous_index = self
                 .entry(previous)
                 .map(|entry| entry.animation_index)
                 .unwrap_or(EMPTY_ANIMATION_INDEX);
             let mix_duration = self.data.mix_duration(previous_index, animation_index);
-            let interrupt_alpha_mul = if previous_applied {
-                self.entry(previous)
-                    .and_then(|prev| {
-                        if prev.mixing_from.is_some() && prev.mix_duration > 0.0 {
-                            Some((prev.mix_time / prev.mix_duration).clamp(0.0, 1.0))
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or(1.0)
-            } else {
-                1.0
-            };
+            let interrupt_alpha_mul = self
+                .entry(previous)
+                .and_then(|prev| {
+                    if prev.mixing_from.is_some() && prev.mix_duration > 0.0 {
+                        Some((prev.mix_time / prev.mix_duration).clamp(0.0, 1.0))
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(1.0);
 
             if let Some(entry_ref) = self.entry_mut(entry_id) {
                 entry_ref.mix_duration = mix_duration;
-                if previous_applied {
-                    entry_ref.mixing_from = Some(previous);
-                    entry_ref.mix_time = 0.0;
-                    entry_ref.interrupt_alpha *= interrupt_alpha_mul;
-                }
+                entry_ref.mixing_from = Some(previous);
+                entry_ref.mix_time = 0.0;
+                entry_ref.interrupt_alpha *= interrupt_alpha_mul;
             }
 
-            if previous_applied {
-                // Match spine-cpp: reset rotation mixing state when an entry becomes `mixingFrom`.
-                if let Some(prev) = self.entry_mut(previous) {
-                    prev.mixing_to = Some(entry_id);
-                    prev.rotation_state.clear();
-                }
+            // Match spine-cpp: reset rotation mixing state when an entry becomes `mixingFrom`.
+            if let Some(prev) = self.entry_mut(previous) {
+                prev.mixing_to = Some(entry_id);
+                prev.rotation_state.clear();
             }
         }
         self.tracks[track_index].current = Some(entry_id);
@@ -1987,9 +1979,8 @@ impl AnimationState {
                 let (timeline_blend, alpha) = match mode {
                     TimelineMode::Subsequent => (from_blend, alpha_mix),
                     TimelineMode::First => (MixBlend::Setup, alpha_mix),
-                    TimelineMode::HoldFirst | TimelineMode::HoldSubsequent => {
-                        (MixBlend::Setup, alpha_hold)
-                    }
+                    TimelineMode::HoldFirst => (MixBlend::Setup, alpha_hold),
+                    TimelineMode::HoldSubsequent => (from_blend, alpha_hold),
                     TimelineMode::HoldMix => {
                         let hold_mix = timeline_hold_mix.get(i).copied().flatten();
                         if let Some(hold_mix) = hold_mix {

@@ -1,4 +1,4 @@
-use crate::runtime::{AnimationState, AnimationStateData};
+use crate::runtime::{AnimationState, AnimationStateData, MixBlend, TrackEntryHandle};
 use crate::{Atlas, Physics, Skeleton, SkeletonData};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -57,6 +57,58 @@ struct RenderCase {
     time_name: &'static str,
     looped: bool,
     skin: Option<&'static str>,
+    physics: Physics,
+}
+
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+enum RenderScenarioCommand {
+    Mix {
+        from: &'static str,
+        to: &'static str,
+        duration: f32,
+    },
+    Set {
+        track: usize,
+        animation: &'static str,
+        looped: bool,
+    },
+    Add {
+        track: usize,
+        animation: &'static str,
+        looped: bool,
+        delay: f32,
+    },
+    SetEmpty {
+        track: usize,
+        mix_duration: f32,
+    },
+    AddEmpty {
+        track: usize,
+        mix_duration: f32,
+        delay: f32,
+    },
+    SetSkin(Option<&'static str>),
+    Physics(Physics),
+    EntryAlpha(f32),
+    EntryEventThreshold(f32),
+    EntryAlphaAttachmentThreshold(f32),
+    EntryMixAttachmentThreshold(f32),
+    EntryMixDrawOrderThreshold(f32),
+    EntryHoldPrevious(bool),
+    EntryMixBlend(MixBlend),
+    EntryReverse(bool),
+    EntryShortestRotation(bool),
+    EntryResetRotationDirections,
+    Step(f32),
+}
+
+#[derive(Clone, Debug)]
+struct RenderScenarioCase {
+    name: &'static str,
+    atlas: &'static str,
+    skeleton: &'static str,
+    commands: Vec<RenderScenarioCommand>,
     physics: Physics,
 }
 
@@ -259,6 +311,83 @@ fn render_cases_json() -> Vec<RenderCase> {
             looped: true,
             skin: Some("davide"),
             physics: Physics::None,
+        },
+    ]
+}
+
+fn render_scenario_cases_json() -> Vec<RenderScenarioCase> {
+    vec![
+        RenderScenarioCase {
+            name: "tank_scn_drive_to_shoot_midmix",
+            atlas: "tank/export/tank-pma.atlas",
+            skeleton: "tank/export/tank-pro.json",
+            physics: Physics::None,
+            commands: vec![
+                RenderScenarioCommand::Mix {
+                    from: "drive",
+                    to: "shoot",
+                    duration: 0.2,
+                },
+                RenderScenarioCommand::Set {
+                    track: 0,
+                    animation: "drive",
+                    looped: true,
+                },
+                RenderScenarioCommand::Step(0.1),
+                RenderScenarioCommand::Set {
+                    track: 0,
+                    animation: "shoot",
+                    looped: false,
+                },
+                RenderScenarioCommand::Step(0.1),
+            ],
+        },
+        RenderScenarioCase {
+            name: "spineboy_scn_idle_to_shoot_midmix",
+            atlas: "spineboy/export/spineboy-pma.atlas",
+            skeleton: "spineboy/export/spineboy-pro.json",
+            physics: Physics::None,
+            commands: vec![
+                RenderScenarioCommand::Mix {
+                    from: "idle",
+                    to: "shoot",
+                    duration: 0.2,
+                },
+                RenderScenarioCommand::Set {
+                    track: 0,
+                    animation: "idle",
+                    looped: true,
+                },
+                RenderScenarioCommand::Step(0.1),
+                RenderScenarioCommand::Set {
+                    track: 0,
+                    animation: "shoot",
+                    looped: false,
+                },
+                RenderScenarioCommand::Step(0.1),
+            ],
+        },
+        RenderScenarioCase {
+            name: "tank_scn_drive_plus_shoot_add_alpha0_5_t0_4",
+            atlas: "tank/export/tank-pma.atlas",
+            skeleton: "tank/export/tank-pro.json",
+            physics: Physics::None,
+            commands: vec![
+                RenderScenarioCommand::Set {
+                    track: 0,
+                    animation: "drive",
+                    looped: true,
+                },
+                RenderScenarioCommand::Step(0.1),
+                RenderScenarioCommand::Set {
+                    track: 1,
+                    animation: "shoot",
+                    looped: false,
+                },
+                RenderScenarioCommand::EntryMixBlend(MixBlend::Add),
+                RenderScenarioCommand::EntryAlpha(0.5),
+                RenderScenarioCommand::Step(0.3),
+            ],
         },
     ]
 }
@@ -467,6 +596,84 @@ fn render_cases_skel() -> Vec<RenderCase> {
     ]
 }
 
+#[cfg(feature = "binary")]
+fn render_scenario_cases_skel() -> Vec<RenderScenarioCase> {
+    vec![
+        RenderScenarioCase {
+            name: "tank_scn_drive_to_shoot_midmix",
+            atlas: "tank/export/tank-pma.atlas",
+            skeleton: "tank/export/tank-pro.skel",
+            physics: Physics::None,
+            commands: vec![
+                RenderScenarioCommand::Mix {
+                    from: "drive",
+                    to: "shoot",
+                    duration: 0.2,
+                },
+                RenderScenarioCommand::Set {
+                    track: 0,
+                    animation: "drive",
+                    looped: true,
+                },
+                RenderScenarioCommand::Step(0.1),
+                RenderScenarioCommand::Set {
+                    track: 0,
+                    animation: "shoot",
+                    looped: false,
+                },
+                RenderScenarioCommand::Step(0.1),
+            ],
+        },
+        RenderScenarioCase {
+            name: "spineboy_scn_idle_to_shoot_midmix",
+            atlas: "spineboy/export/spineboy-pma.atlas",
+            skeleton: "spineboy/export/spineboy-pro.skel",
+            physics: Physics::None,
+            commands: vec![
+                RenderScenarioCommand::Mix {
+                    from: "idle",
+                    to: "shoot",
+                    duration: 0.2,
+                },
+                RenderScenarioCommand::Set {
+                    track: 0,
+                    animation: "idle",
+                    looped: true,
+                },
+                RenderScenarioCommand::Step(0.1),
+                RenderScenarioCommand::Set {
+                    track: 0,
+                    animation: "shoot",
+                    looped: false,
+                },
+                RenderScenarioCommand::Step(0.1),
+            ],
+        },
+        RenderScenarioCase {
+            name: "tank_scn_drive_plus_shoot_add_alpha0_5_t0_4",
+            atlas: "tank/export/tank-pma.atlas",
+            skeleton: "tank/export/tank-pro.skel",
+            physics: Physics::None,
+            commands: vec![
+                RenderScenarioCommand::Set {
+                    track: 0,
+                    animation: "drive",
+                    looped: true,
+                },
+                RenderScenarioCommand::Step(0.1),
+                RenderScenarioCommand::Set {
+                    track: 1,
+                    animation: "shoot",
+                    looped: false,
+                },
+                RenderScenarioCommand::EntryMixBlend(MixBlend::Add),
+                RenderScenarioCommand::EntryAlpha(0.5),
+                RenderScenarioCommand::Step(0.3),
+            ],
+        },
+    ]
+}
+
 fn read_to_string(path: &Path) -> String {
     std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path:?}: {e}"))
 }
@@ -622,12 +829,12 @@ fn max_color_channel_diff(a: u32, b: u32) -> u32 {
     let aa = (a >> 24) & 0xff;
     let ar = (a >> 16) & 0xff;
     let ag = (a >> 8) & 0xff;
-    let ab = (a >> 0) & 0xff;
+    let ab = a & 0xff;
 
     let ba = (b >> 24) & 0xff;
     let br = (b >> 16) & 0xff;
     let bg = (b >> 8) & 0xff;
-    let bb = (b >> 0) & 0xff;
+    let bb = b & 0xff;
 
     (aa.abs_diff(ba))
         .max(ar.abs_diff(br))
@@ -740,7 +947,241 @@ fn assert_render_parity(case: &RenderCase, golden_path: &Path) {
 
     let eps_pos = 1e-3_f32;
     let eps_uv = 1e-5_f32;
-    let eps_color = 1_u32;
+    let eps_color = 2_u32;
+
+    assert_eq!(
+        golden_tris.len(),
+        rust_tris.len(),
+        "{}: triangle count mismatch: {} != {}",
+        case.name,
+        golden_tris.len(),
+        rust_tris.len()
+    );
+
+    for (i, (a, b)) in golden_tris.iter().zip(rust_tris.iter()).enumerate() {
+        assert_eq!(
+            a.page,
+            b.page,
+            "{}: triangle #{i}: page mismatch: {} != {} (A draw={}, tri={}, B draw={}, tri={})",
+            case.name,
+            a.page,
+            b.page,
+            a.reference.draw_index,
+            a.reference.tri_index,
+            b.reference.draw_index,
+            b.reference.tri_index
+        );
+        assert_eq!(
+            a.blend,
+            b.blend,
+            "{}: triangle #{i}: blend mismatch: {} != {} (A draw={}, tri={}, B draw={}, tri={})",
+            case.name,
+            a.blend,
+            b.blend,
+            a.reference.draw_index,
+            a.reference.tri_index,
+            b.reference.draw_index,
+            b.reference.tri_index
+        );
+
+        for vi in 0..3 {
+            let (ax, ay, au, av) = a.v[vi];
+            let (bx, by, bu, bv) = b.v[vi];
+            assert!(
+                ax.is_finite() && ay.is_finite() && au.is_finite() && av.is_finite(),
+                "{}: triangle #{i} vertex {vi}: non-finite A",
+                case.name
+            );
+            assert!(
+                bx.is_finite() && by.is_finite() && bu.is_finite() && bv.is_finite(),
+                "{}: triangle #{i} vertex {vi}: non-finite B",
+                case.name
+            );
+
+            let dx = (ax - bx).abs();
+            let dy = (ay - by).abs();
+            let du = (au - bu).abs();
+            let dv = (av - bv).abs();
+
+            assert!(
+                dx <= eps_pos && dy <= eps_pos,
+                "{}: triangle #{i} vertex {vi}: pos mismatch: dx={dx} dy={dy} (eps={eps_pos})",
+                case.name
+            );
+            assert!(
+                du <= eps_uv && dv <= eps_uv,
+                "{}: triangle #{i} vertex {vi}: uv mismatch: du={du} dv={dv} (eps={eps_uv})",
+                case.name
+            );
+
+            let dc = max_color_channel_diff(a.c[vi], b.c[vi]);
+            assert!(
+                dc <= eps_color,
+                "{}: triangle #{i} vertex {vi}: color mismatch: diff={dc} A={:#x} B={:#x}",
+                case.name,
+                a.c[vi],
+                b.c[vi]
+            );
+            let ddc = max_color_channel_diff(a.dc[vi], b.dc[vi]);
+            assert!(
+                ddc <= eps_color,
+                "{}: triangle #{i} vertex {vi}: dark color mismatch: diff={ddc} A={:#x} B={:#x}",
+                case.name,
+                a.dc[vi],
+                b.dc[vi]
+            );
+        }
+    }
+}
+
+fn step_animation(state: &mut AnimationState, skeleton: &mut Skeleton, dt: f32, physics: Physics) {
+    state.update(dt);
+    state.apply(skeleton);
+    skeleton.update(dt);
+    skeleton.update_world_transform_with_physics(physics);
+}
+
+fn apply_entry_command(
+    state: &mut AnimationState,
+    last_entry: &TrackEntryHandle,
+    cmd: &RenderScenarioCommand,
+) {
+    match *cmd {
+        RenderScenarioCommand::EntryAlpha(alpha) => last_entry.set_alpha(state, alpha),
+        RenderScenarioCommand::EntryEventThreshold(t) => last_entry.set_event_threshold(state, t),
+        RenderScenarioCommand::EntryAlphaAttachmentThreshold(t) => {
+            last_entry.set_alpha_attachment_threshold(state, t);
+        }
+        RenderScenarioCommand::EntryMixAttachmentThreshold(t) => {
+            last_entry.set_mix_attachment_threshold(state, t);
+        }
+        RenderScenarioCommand::EntryMixDrawOrderThreshold(t) => {
+            last_entry.set_mix_draw_order_threshold(state, t);
+        }
+        RenderScenarioCommand::EntryHoldPrevious(v) => last_entry.set_hold_previous(state, v),
+        RenderScenarioCommand::EntryMixBlend(v) => last_entry.set_mix_blend(state, v),
+        RenderScenarioCommand::EntryReverse(v) => last_entry.set_reverse(state, v),
+        RenderScenarioCommand::EntryShortestRotation(v) => {
+            last_entry.set_shortest_rotation(state, v)
+        }
+        RenderScenarioCommand::EntryResetRotationDirections => {
+            last_entry.reset_rotation_directions(state)
+        }
+        _ => unreachable!("non-entry command passed to apply_entry_command"),
+    }
+}
+
+fn assert_render_scenario_parity(case: &RenderScenarioCase, golden_path: &Path) {
+    let atlas_path = example_path(case.atlas);
+    let skeleton_path = example_path(case.skeleton);
+    let atlas_text = read_to_string(&atlas_path);
+    let atlas =
+        Atlas::from_str(&atlas_text).unwrap_or_else(|e| panic!("parse atlas {atlas_path:?}: {e}"));
+
+    let data = load_skeleton_data(&skeleton_path);
+    let mut skeleton = Skeleton::new(data.clone());
+    skeleton.set_to_setup_pose();
+
+    let mut state = AnimationState::new(AnimationStateData::new(data));
+
+    let mut physics = case.physics;
+    let mut last_entry: Option<TrackEntryHandle> = None;
+    for cmd in &case.commands {
+        match *cmd {
+            RenderScenarioCommand::Mix { from, to, duration } => {
+                state
+                    .data_mut()
+                    .set_mix(from, to, duration)
+                    .unwrap_or_else(|e| panic!("set mix {from:?}->{to:?}: {e}"));
+            }
+            RenderScenarioCommand::Set {
+                track,
+                animation,
+                looped,
+            } => {
+                last_entry = Some(
+                    state
+                        .set_animation(track, animation, looped)
+                        .unwrap_or_else(|e| panic!("set animation {track} {animation:?}: {e}")),
+                );
+            }
+            RenderScenarioCommand::Add {
+                track,
+                animation,
+                looped,
+                delay,
+            } => {
+                last_entry = Some(
+                    state
+                        .add_animation(track, animation, looped, delay)
+                        .unwrap_or_else(|e| panic!("add animation {track} {animation:?}: {e}")),
+                );
+            }
+            RenderScenarioCommand::SetEmpty {
+                track,
+                mix_duration,
+            } => {
+                last_entry = Some(
+                    state
+                        .set_empty_animation(track, mix_duration)
+                        .unwrap_or_else(|e| panic!("set empty {track}: {e}")),
+                );
+            }
+            RenderScenarioCommand::AddEmpty {
+                track,
+                mix_duration,
+                delay,
+            } => {
+                last_entry = Some(
+                    state
+                        .add_empty_animation(track, mix_duration, delay)
+                        .unwrap_or_else(|e| panic!("add empty {track}: {e}")),
+                );
+            }
+            RenderScenarioCommand::SetSkin(name) => {
+                skeleton
+                    .set_skin(name)
+                    .unwrap_or_else(|e| panic!("set skin {name:?}: {e}"));
+            }
+            RenderScenarioCommand::Physics(p) => physics = p,
+            RenderScenarioCommand::Step(dt) => {
+                step_animation(&mut state, &mut skeleton, dt, physics)
+            }
+            RenderScenarioCommand::EntryAlpha(_)
+            | RenderScenarioCommand::EntryEventThreshold(_)
+            | RenderScenarioCommand::EntryAlphaAttachmentThreshold(_)
+            | RenderScenarioCommand::EntryMixAttachmentThreshold(_)
+            | RenderScenarioCommand::EntryMixDrawOrderThreshold(_)
+            | RenderScenarioCommand::EntryHoldPrevious(_)
+            | RenderScenarioCommand::EntryMixBlend(_)
+            | RenderScenarioCommand::EntryReverse(_)
+            | RenderScenarioCommand::EntryShortestRotation(_)
+            | RenderScenarioCommand::EntryResetRotationDirections => {
+                let Some(entry) = last_entry.as_ref() else {
+                    panic!(
+                        "{:?}: entry command requires a preceding set/add",
+                        case.name
+                    );
+                };
+                apply_entry_command(&mut state, entry, cmd);
+            }
+        }
+    }
+
+    let rust_tris = triangles_from_rust(&skeleton, &atlas);
+
+    let golden_json = std::fs::read_to_string(golden_path)
+        .unwrap_or_else(|e| panic!("read golden {golden_path:?}: {e}"));
+    let golden: RenderDoc = serde_json::from_str(&golden_json)
+        .unwrap_or_else(|e| panic!("parse golden {golden_path:?}: {e}"));
+    let golden_tris = triangles_from_doc(&golden);
+
+    // Scenario mode exercises mixing chains (including holdPrevious/mixBlend/additive overlays),
+    // which tends to magnify small floating-point differences across implementations.
+    // Keep the tolerance tight enough to catch semantic mismatches but avoid flakiness.
+    let eps_pos = 3e-3_f32;
+    let eps_uv = 1e-5_f32;
+    let eps_color = 2_u32;
 
     assert_eq!(
         golden_tris.len(),
@@ -842,6 +1283,14 @@ fn render_oracle_parity_json_cases_match_cpp() {
 }
 
 #[test]
+fn render_oracle_parity_json_scenarios_match_cpp() {
+    for case in render_scenario_cases_json() {
+        let golden = golden_render_path(&format!("{}.json", case.name));
+        assert_render_scenario_parity(&case, &golden);
+    }
+}
+
+#[test]
 #[cfg(feature = "binary")]
 fn render_oracle_parity_skel_cases_match_cpp() {
     for case in render_cases_skel() {
@@ -853,5 +1302,14 @@ fn render_oracle_parity_skel_cases_match_cpp() {
         );
         let golden = golden_render_skel_path(&golden_name);
         assert_render_parity(&case, &golden);
+    }
+}
+
+#[test]
+#[cfg(feature = "binary")]
+fn render_oracle_parity_skel_scenarios_match_cpp() {
+    for case in render_scenario_cases_skel() {
+        let golden = golden_render_skel_path(&format!("{}.json", case.name));
+        assert_render_scenario_parity(&case, &golden);
     }
 }

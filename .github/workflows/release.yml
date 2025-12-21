@@ -5,13 +5,57 @@ on:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+"
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  test:
-    name: Test Before Release
+  validate:
+    name: Validate tag/version
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure Cargo.toml versions match tag
+        run: |
+          python3 - <<'PY'
+          import os, re, sys, tomllib
+
+          version = os.environ["GITHUB_REF_NAME"].removeprefix("v")
+          if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+              raise SystemExit(f"Invalid tag version: {version}")
+
+          def read_version(path: str) -> str:
+              with open(path, "rb") as f:
+                  data = tomllib.load(f)
+              return data["package"]["version"]
+
+          crates = {
+              "spine2d": read_version("spine2d/Cargo.toml"),
+              "spine2d-wgpu": read_version("spine2d-wgpu/Cargo.toml"),
+          }
+          bad = {k: v for k, v in crates.items() if v != version}
+          if bad:
+              raise SystemExit(f"Tag v{version} does not match crate versions: {bad}")
+          print(f"OK: v{version} matches {crates}")
+          PY
+
+  test:
+    name: Test before publish
+    runs-on: ubuntu-latest
+    needs: validate
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -19,19 +63,28 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          components: rustfmt, clippy
 
-      - name: Cache
+      - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
 
-      - name: Run tests (spine2d)
-        run: cargo test -p spine2d --features json,binary
+      - name: Check formatting
+        run: cargo fmt --all -- --check
 
       - name: Clippy (spine2d)
-        run: cargo clippy -p spine2d --features json,binary -- -D warnings
+        run: cargo clippy -p spine2d --all-targets --features json,binary,glam -- -D warnings
 
       - name: Clippy (spine2d-wgpu)
-        run: cargo clippy -p spine2d-wgpu --features json -- -D warnings
+        run: cargo clippy -p spine2d-wgpu --all-targets --features json -- -D warnings
+
+      - name: Test (spine2d)
+        run: cargo test -p spine2d --features json,binary,glam
+
+      - name: Cargo package (spine2d)
+        run: cargo package -p spine2d
+
+      - name: Cargo package (spine2d-wgpu)
+        run: cargo package -p spine2d-wgpu
 
   publish:
     name: Publish to crates.io
@@ -44,29 +97,25 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache
+      - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
 
       - name: Publish spine2d
-        run: cargo publish -p spine2d --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p spine2d --token "${{ secrets.CARGO_REGISTRY_TOKEN }}"
 
-      # crates.io index propagation can be eventually consistent; retry a few times.
-      - name: Publish spine2d-wgpu (retry)
-        shell: bash
+      - name: Publish spine2d-wgpu
         run: |
-          set -euo pipefail
-          for i in {1..10}; do
-            echo "Attempt $i/10: cargo publish -p spine2d-wgpu"
+          for i in 1 2 3 4 5 6 7 8 9 10; do
             if cargo publish -p spine2d-wgpu --token "${{ secrets.CARGO_REGISTRY_TOKEN }}"; then
               exit 0
             fi
-            echo "Publish failed (likely index not updated yet). Sleeping..."
-            sleep 20
+            echo "spine2d-wgpu publish failed (attempt $i), waiting for crates.io index..."
+            sleep 30
           done
           exit 1
 
   github-release:
-    name: Create GitHub Release
+    name: Create GitHub release
     runs-on: ubuntu-latest
     needs: publish
     permissions:
@@ -75,27 +124,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Extract release notes from CHANGELOG.md
+      - name: Extract release notes
         id: notes
-        shell: bash
-        run: |
-          set -euo pipefail
-          VERSION="${GITHUB_REF_NAME#v}"
-          awk -v ver="$VERSION" '
-            $0 ~ "^## "ver"$" {found=1; next}
-            found && $0 ~ "^## " {exit}
-            found {print}
-          ' CHANGELOG.md > /tmp/release_notes.txt
-          if [ ! -s /tmp/release_notes.txt ]; then
-            echo "No changelog section found for $VERSION; using tag only." > /tmp/release_notes.txt
-          fi
-          echo "notes_file=/tmp/release_notes.txt" >> "$GITHUB_OUTPUT"
+        uses: ffurrer2/extract-release-notes@v2
 
-      - name: Create GitHub release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release create "${GITHUB_REF_NAME}" \
-            --title "${GITHUB_REF_NAME}" \
-            --notes-file "${{ steps.notes.outputs.notes_file }}"
-
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body: ${{ steps.notes.outputs.release_notes }}

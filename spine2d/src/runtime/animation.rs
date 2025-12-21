@@ -915,9 +915,6 @@ pub(crate) fn apply_slider_time_timeline(
     else {
         return;
     };
-    if !constraint.active {
-        return;
-    }
     let Some(data) = skeleton.data.slider_constraints.get(constraint.data_index) else {
         return;
     };
@@ -960,9 +957,6 @@ pub(crate) fn apply_slider_mix_timeline(
     else {
         return;
     };
-    if !constraint.active {
-        return;
-    }
     let Some(data) = skeleton.data.slider_constraints.get(constraint.data_index) else {
         return;
     };
@@ -1002,10 +996,7 @@ pub(crate) fn apply_physics_reset_timeline(
     let mut constraint_opt = None;
     if timeline.constraint_index != -1 {
         let idx = timeline.constraint_index as usize;
-        let Some(c) = skeleton.physics_constraints.get_mut(idx) else {
-            return;
-        };
-        if !c.active {
+        if idx >= skeleton.physics_constraints.len() {
             return;
         }
         constraint_opt = Some(idx);
@@ -1043,9 +1034,7 @@ pub(crate) fn apply_physics_reset_timeline(
             skeleton.physics_constraints[idx].reset_with_time(now);
         } else {
             for c in &mut skeleton.physics_constraints {
-                if c.active {
-                    c.reset_with_time(now);
-                }
+                c.reset_with_time(now);
             }
         }
     }
@@ -1118,9 +1107,6 @@ pub(crate) fn apply_physics_constraint_timeline(
 
         if constraint_index == -1 {
             for c in &mut skeleton.physics_constraints {
-                if !c.active {
-                    continue;
-                }
                 let Some(data) = skeleton.data.physics_constraints.get(c.data_index()) else {
                     continue;
                 };
@@ -1137,9 +1123,6 @@ pub(crate) fn apply_physics_constraint_timeline(
         let Some(c) = skeleton.physics_constraints.get_mut(idx) else {
             return;
         };
-        if !c.active {
-            return;
-        }
         let setup = skeleton
             .data
             .physics_constraints
@@ -1268,9 +1251,6 @@ fn apply_path_position_timeline(
     let Some(constraint) = skeleton.path_constraints.get_mut(timeline.constraint_index) else {
         return;
     };
-    if !constraint.active {
-        return;
-    }
 
     let setup = skeleton
         .data
@@ -1312,9 +1292,6 @@ fn apply_path_spacing_timeline(
     let Some(constraint) = skeleton.path_constraints.get_mut(timeline.constraint_index) else {
         return;
     };
-    if !constraint.active {
-        return;
-    }
 
     let setup = skeleton
         .data
@@ -1356,9 +1333,6 @@ fn apply_path_mix_timeline(
     let Some(constraint) = skeleton.path_constraints.get_mut(timeline.constraint_index) else {
         return;
     };
-    if !constraint.active {
-        return;
-    }
 
     let setup = skeleton
         .data
@@ -1484,9 +1458,6 @@ pub(crate) fn apply_transform_constraint_timeline(
     else {
         return;
     };
-    if !constraint.active {
-        return;
-    }
     if timeline.frames.is_empty() {
         return;
     }
@@ -1666,9 +1637,6 @@ pub(crate) fn apply_ik_constraint_timeline(
     let Some(constraint) = skeleton.ik_constraints.get_mut(timeline.constraint_index) else {
         return;
     };
-    if !constraint.active {
-        return;
-    }
     if timeline.frames.is_empty() {
         return;
     }

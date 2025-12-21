@@ -80,3 +80,12 @@ mod oracle_scenario_parity_tests;
 
 #[cfg(all(test, feature = "json", feature = "upstream-smoke"))]
 mod upstream_spine_c_smoke_tests;
+
+#[cfg(all(test, feature = "binary", feature = "upstream-smoke"))]
+mod upstream_spine_skel_smoke_tests;
+
+#[cfg(all(test, feature = "binary", feature = "upstream-smoke"))]
+mod upstream_libgdx_physics_demo_tests;
+
+#[cfg(all(test, feature = "json", feature = "upstream-smoke"))]
+mod upstream_ik_demo_tests;

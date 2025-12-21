@@ -1,5 +1,6 @@
 use crate::runtime::{AnimationState, AnimationStateData};
-use crate::{Skeleton, SkeletonData};
+use crate::{AttachmentData, Skeleton, SkeletonData, SkinData};
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 fn upstream_examples_root() -> PathBuf {
@@ -62,6 +63,48 @@ fn assert_approx(actual: f32, expected: f32) {
     );
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+struct AttachmentSig {
+    kind: &'static str,
+    name: String,
+    path: Option<String>,
+}
+
+fn attachment_sig(a: &AttachmentData) -> AttachmentSig {
+    match a {
+        AttachmentData::Region(r) => AttachmentSig {
+            kind: "region",
+            name: r.name.clone(),
+            path: Some(r.path.clone()),
+        },
+        AttachmentData::Mesh(m) => AttachmentSig {
+            kind: "mesh",
+            name: m.name.clone(),
+            path: Some(m.path.clone()),
+        },
+        AttachmentData::Point(p) => AttachmentSig {
+            kind: "point",
+            name: p.name.clone(),
+            path: None,
+        },
+        AttachmentData::Path(p) => AttachmentSig {
+            kind: "path",
+            name: p.name.clone(),
+            path: None,
+        },
+        AttachmentData::BoundingBox(b) => AttachmentSig {
+            kind: "bounding_box",
+            name: b.name.clone(),
+            path: None,
+        },
+        AttachmentData::Clipping(c) => AttachmentSig {
+            kind: "clipping",
+            name: c.name.clone(),
+            path: None,
+        },
+    }
+}
+
 #[test]
 fn skin_required_active_and_gating_match_spine_cpp_semantics() {
     let path = example_json_path("mix-and-match/export/mix-and-match-pro.json");
@@ -106,4 +149,148 @@ fn skin_required_active_and_gating_match_spine_cpp_semantics() {
     let bone = &skeleton.bones[hat_control_bone];
     assert_approx(bone.x, setup.x);
     assert_approx(bone.y, setup.y);
+}
+
+#[test]
+fn mix_and_match_add_skin_composition_matches_upstream_demo_semantics() {
+    // Based on `spine-libgdx` `MixAndMatchTest.java`:
+    // it builds a custom skin by unioning multiple item skins.
+    let path = example_json_path("mix-and-match/export/mix-and-match-pro.json");
+    let json = std::fs::read_to_string(&path).expect("read mix-and-match-pro.json");
+    let data = SkeletonData::from_json_str(&json).expect("parse mix-and-match-pro.json");
+    let mut data = (*data).clone();
+
+    let component_skins = [
+        "skin-base",
+        "nose/short",
+        "eyelids/girly",
+        "eyes/violet",
+        "hair/brown",
+        "clothes/hoodie-orange",
+        "legs/pants-jeans",
+        "accessories/bag",
+        "accessories/hat-red-yellow",
+    ];
+
+    let mut expected_bones = Vec::new();
+    let mut expected_ik = Vec::new();
+    let mut expected_transform = Vec::new();
+    let mut expected_path = Vec::new();
+    let mut expected_physics = Vec::new();
+    let mut expected_slider = Vec::new();
+
+    let mut expected_attachments: HashMap<(usize, String), AttachmentSig> = HashMap::new();
+
+    let mut custom = SkinData::new("custom-girl", data.slots.len());
+    for skin_name in component_skins {
+        let skin = data
+            .skin(skin_name)
+            .unwrap_or_else(|| panic!("missing skin: {skin_name}"));
+
+        for &i in &skin.bones {
+            if !expected_bones.contains(&i) {
+                expected_bones.push(i);
+            }
+        }
+        for &i in &skin.ik_constraints {
+            if !expected_ik.contains(&i) {
+                expected_ik.push(i);
+            }
+        }
+        for &i in &skin.transform_constraints {
+            if !expected_transform.contains(&i) {
+                expected_transform.push(i);
+            }
+        }
+        for &i in &skin.path_constraints {
+            if !expected_path.contains(&i) {
+                expected_path.push(i);
+            }
+        }
+        for &i in &skin.physics_constraints {
+            if !expected_physics.contains(&i) {
+                expected_physics.push(i);
+            }
+        }
+        for &i in &skin.slider_constraints {
+            if !expected_slider.contains(&i) {
+                expected_slider.push(i);
+            }
+        }
+
+        for (slot_index, slot_map) in skin.attachments.iter().enumerate() {
+            for (key, attachment) in slot_map {
+                expected_attachments.insert((slot_index, key.clone()), attachment_sig(attachment));
+            }
+        }
+
+        custom.add_skin(skin);
+    }
+
+    assert_eq!(custom.bones, expected_bones);
+    assert_eq!(custom.ik_constraints, expected_ik);
+    assert_eq!(custom.transform_constraints, expected_transform);
+    assert_eq!(custom.path_constraints, expected_path);
+    assert_eq!(custom.physics_constraints, expected_physics);
+    assert_eq!(custom.slider_constraints, expected_slider);
+
+    let expected_keys: HashSet<(usize, String)> = expected_attachments.keys().cloned().collect();
+    let mut actual_keys = HashSet::new();
+    for (slot_index, slot_map) in custom.attachments.iter().enumerate() {
+        for key in slot_map.keys() {
+            actual_keys.insert((slot_index, key.clone()));
+        }
+    }
+    assert_eq!(actual_keys, expected_keys);
+
+    for ((slot_index, key), expected_sig) in expected_attachments {
+        let Some(actual) = custom.attachment(slot_index, &key) else {
+            panic!("custom skin missing attachment: slot={slot_index}, key={key}");
+        };
+        assert_eq!(
+            attachment_sig(actual),
+            expected_sig,
+            "attachment mismatch: slot={slot_index}, key={key}"
+        );
+    }
+
+    // Also verify `Skeleton::set_skin` correctly activates bones and applies setup attachments
+    // from the runtime-composed skin.
+    data.skins.insert(custom.name.clone(), custom.clone());
+    let data = std::sync::Arc::new(data);
+    let mut skeleton = Skeleton::new(data.clone());
+    skeleton.set_to_setup_pose();
+    skeleton
+        .set_skin(Some(custom.name.as_str()))
+        .expect("set custom skin");
+
+    let hat_control_bone = bone_index(&data, "hat-control");
+    assert!(
+        skeleton.bones[hat_control_bone].active,
+        "hat-control should be active when the custom skin includes hat bones"
+    );
+
+    let some_setup_attachment_slot = data
+        .slots
+        .iter()
+        .enumerate()
+        .find_map(|(i, s)| {
+            let setup = s.attachment.as_deref()?;
+            if custom.attachment(i, setup).is_some() {
+                Some((i, setup.to_string()))
+            } else {
+                None
+            }
+        })
+        .expect("expected at least one setup attachment to exist in the custom skin");
+
+    let (slot_index, setup_key) = some_setup_attachment_slot;
+    assert_eq!(
+        skeleton.slots[slot_index].attachment.as_deref(),
+        Some(setup_key.as_str())
+    );
+    assert_eq!(
+        skeleton.slots[slot_index].attachment_skin.as_deref(),
+        Some("custom-girl")
+    );
 }

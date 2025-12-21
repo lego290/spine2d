@@ -1,3 +1,5 @@
+#![allow(clippy::excessive_precision)]
+
 use crate::runtime::{AnimationState, AnimationStateData};
 use crate::{Skeleton, SkeletonData};
 use std::path::PathBuf;

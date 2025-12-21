@@ -83,6 +83,7 @@ impl TransformProperty {
         }
     }
 
+    #[cfg(feature = "json")]
     pub(crate) fn from_json_name(name: &str) -> Option<Self> {
         match name {
             "rotate" => Some(Self::Rotate),
@@ -472,6 +473,56 @@ pub struct SkinData {
 }
 
 impl SkinData {
+    /// Creates an empty skin with storage for `slot_count` slots.
+    ///
+    /// This is intended for runtime composition use-cases (eg. "mix and match" skins).
+    pub fn new(name: impl Into<String>, slot_count: usize) -> Self {
+        Self {
+            name: name.into(),
+            attachments: (0..slot_count).map(|_| HashMap::new()).collect(),
+            bones: Vec::new(),
+            ik_constraints: Vec::new(),
+            transform_constraints: Vec::new(),
+            path_constraints: Vec::new(),
+            physics_constraints: Vec::new(),
+            slider_constraints: Vec::new(),
+        }
+    }
+
+    /// Merges `other` into `self` (union of bones/constraints + last-write-wins attachments).
+    ///
+    /// Mirrors the behaviour of the official runtimes' `Skin::addSkin`.
+    pub fn add_skin(&mut self, other: &SkinData) {
+        fn push_unique(target: &mut Vec<usize>, values: &[usize]) {
+            for &v in values {
+                if !target.contains(&v) {
+                    target.push(v);
+                }
+            }
+        }
+
+        push_unique(&mut self.bones, &other.bones);
+        push_unique(&mut self.ik_constraints, &other.ik_constraints);
+        push_unique(
+            &mut self.transform_constraints,
+            &other.transform_constraints,
+        );
+        push_unique(&mut self.path_constraints, &other.path_constraints);
+        push_unique(&mut self.physics_constraints, &other.physics_constraints);
+        push_unique(&mut self.slider_constraints, &other.slider_constraints);
+
+        if self.attachments.len() < other.attachments.len() {
+            self.attachments.extend(
+                (0..(other.attachments.len() - self.attachments.len())).map(|_| HashMap::new()),
+            );
+        }
+        for (slot_index, slot_map) in other.attachments.iter().enumerate() {
+            for (key, attachment) in slot_map {
+                self.attachments[slot_index].insert(key.clone(), attachment.clone());
+            }
+        }
+    }
+
     pub fn attachment(&self, slot_index: usize, attachment_name: &str) -> Option<&AttachmentData> {
         self.attachments
             .get(slot_index)

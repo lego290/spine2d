@@ -390,7 +390,7 @@ head
         assert_eq!(atlas.pages[0].width, 64);
         assert_eq!(atlas.pages[0].height, 64);
         assert!((atlas.pages[0].scale - 0.5).abs() <= 1.0e-6);
-        assert_eq!(atlas.pages[0].pma, true);
+        assert!(atlas.pages[0].pma);
         assert_eq!(atlas.pages[0].min_filter, AtlasFilter::Linear);
         assert_eq!(atlas.pages[0].mag_filter, AtlasFilter::Linear);
         assert_eq!(atlas.pages[0].wrap_u, AtlasWrap::ClampToEdge);

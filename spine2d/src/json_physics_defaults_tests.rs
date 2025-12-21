@@ -14,7 +14,10 @@ fn json_physics_constraint_defaults_match_spine_cpp() {
 "#;
 
     let data = SkeletonData::from_json_str(json).expect("parse skeleton json");
-    let c = data.physics_constraints.get(0).expect("physics constraint");
+    let c = data
+        .physics_constraints
+        .first()
+        .expect("physics constraint");
 
     assert_eq!(c.inertia, 0.5);
     assert_eq!(c.strength, 100.0);

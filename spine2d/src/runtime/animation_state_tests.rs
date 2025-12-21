@@ -2157,18 +2157,6 @@ fn set_animation_twice() {
             total_time: 0.0,
         },
         ResultRow {
-            animation_index: 0,
-            name: "end".into(),
-            track_time: 0.0,
-            total_time: 0.0,
-        },
-        ResultRow {
-            animation_index: 0,
-            name: "dispose".into(),
-            track_time: 0.0,
-            total_time: 0.0,
-        },
-        ResultRow {
             animation_index: 1,
             name: "start".into(),
             track_time: 0.0,
@@ -2179,6 +2167,18 @@ fn set_animation_twice() {
             name: "event 0".into(),
             track_time: 0.0,
             total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "end".into(),
+            track_time: 0.0,
+            total_time: 0.1,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "dispose".into(),
+            track_time: 0.0,
+            total_time: 0.1,
         },
         ResultRow {
             animation_index: 1,
@@ -2205,18 +2205,6 @@ fn set_animation_twice() {
             total_time: 0.8,
         },
         ResultRow {
-            animation_index: 0,
-            name: "end".into(),
-            track_time: 0.0,
-            total_time: 0.8,
-        },
-        ResultRow {
-            animation_index: 0,
-            name: "dispose".into(),
-            track_time: 0.0,
-            total_time: 0.8,
-        },
-        ResultRow {
             animation_index: 2,
             name: "start".into(),
             track_time: 0.0,
@@ -2238,6 +2226,18 @@ fn set_animation_twice() {
             animation_index: 1,
             name: "dispose".into(),
             track_time: 0.9,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "end".into(),
+            track_time: 0.1,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "dispose".into(),
+            track_time: 0.1,
             total_time: 1.0,
         },
         ResultRow {
@@ -2320,18 +2320,6 @@ fn set_animation_twice_with_multiple_mixing() {
             total_time: 0.0,
         },
         ResultRow {
-            animation_index: 0,
-            name: "end".into(),
-            track_time: 0.0,
-            total_time: 0.0,
-        },
-        ResultRow {
-            animation_index: 0,
-            name: "dispose".into(),
-            track_time: 0.0,
-            total_time: 0.0,
-        },
-        ResultRow {
             animation_index: 1,
             name: "start".into(),
             track_time: 0.0,
@@ -2358,18 +2346,6 @@ fn set_animation_twice_with_multiple_mixing() {
         ResultRow {
             animation_index: 0,
             name: "interrupt".into(),
-            track_time: 0.0,
-            total_time: 0.2,
-        },
-        ResultRow {
-            animation_index: 0,
-            name: "end".into(),
-            track_time: 0.0,
-            total_time: 0.2,
-        },
-        ResultRow {
-            animation_index: 0,
-            name: "dispose".into(),
             track_time: 0.0,
             total_time: 0.2,
         },
@@ -2404,18 +2380,6 @@ fn set_animation_twice_with_multiple_mixing() {
             total_time: 0.4,
         },
         ResultRow {
-            animation_index: 1,
-            name: "end".into(),
-            track_time: 0.0,
-            total_time: 0.4,
-        },
-        ResultRow {
-            animation_index: 1,
-            name: "dispose".into(),
-            track_time: 0.0,
-            total_time: 0.4,
-        },
-        ResultRow {
             animation_index: 0,
             name: "start".into(),
             track_time: 0.0,
@@ -2428,6 +2392,18 @@ fn set_animation_twice_with_multiple_mixing() {
             total_time: 0.5,
         },
         ResultRow {
+            animation_index: 0,
+            name: "end".into(),
+            track_time: 0.6,
+            total_time: 0.7,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "dispose".into(),
+            track_time: 0.6,
+            total_time: 0.7,
+        },
+        ResultRow {
             animation_index: 1,
             name: "end".into(),
             track_time: 0.8,
@@ -2437,6 +2413,18 @@ fn set_animation_twice_with_multiple_mixing() {
             animation_index: 1,
             name: "dispose".into(),
             track_time: 0.8,
+            total_time: 0.9,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "end".into(),
+            track_time: 0.6,
+            total_time: 0.9,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "dispose".into(),
+            track_time: 0.6,
             total_time: 0.9,
         },
         ResultRow {
@@ -2455,6 +2443,18 @@ fn set_animation_twice_with_multiple_mixing() {
             animation_index: 2,
             name: "dispose".into(),
             track_time: 0.8,
+            total_time: 1.1,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "end".into(),
+            track_time: 0.6,
+            total_time: 1.1,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "dispose".into(),
+            track_time: 0.6,
             total_time: 1.1,
         },
         ResultRow {
@@ -2592,7 +2592,7 @@ fn set_animation_during_animation_state_listener() {
     }
 
     let (mut state, mut skeleton, recording) = setup();
-    state.set_listener(Reentrant::default());
+    state.set_listener(Reentrant);
 
     state.add_animation(0, "events0", false, 0.0).unwrap();
     state.add_animation(0, "events1", false, 0.0).unwrap();

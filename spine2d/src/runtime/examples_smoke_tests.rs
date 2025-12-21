@@ -1,5 +1,7 @@
+use crate::runtime::{AnimationState, AnimationStateData};
 use crate::{MixBlend, Skeleton, SkeletonData, apply_animation, build_draw_list};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 fn upstream_examples_root() -> PathBuf {
     if let Ok(dir) = std::env::var("SPINE2D_UPSTREAM_EXAMPLES_DIR") {
@@ -45,7 +47,7 @@ fn assert_skeleton_finite(skeleton: &Skeleton) {
 fn smoke_example(relative: &str) {
     let path = example_json_path(relative);
     let json = std::fs::read_to_string(&path).expect("read example json");
-    let data = SkeletonData::from_json_str(&json).expect("parse example json");
+    let data: Arc<SkeletonData> = SkeletonData::from_json_str(&json).expect("parse example json");
 
     let mut skeleton = Skeleton::new(data.clone());
     skeleton.set_to_setup_pose();
@@ -63,6 +65,43 @@ fn smoke_example(relative: &str) {
         );
         skeleton.update_world_transform();
         assert_skeleton_finite(&skeleton);
+    }
+
+    // Broad coverage for the MixBlend::Add path: try a 2-track overlay when the asset has at least
+    // two animations. This is a smoke check (no oracle parity), but it exercises a large number of
+    // timeline types in the Add blending path.
+    if data.animations.len() >= 2 {
+        let mut skeleton = Skeleton::new(data.clone());
+        let mut state = AnimationState::new(AnimationStateData::new(data.clone()));
+        skeleton.set_to_setup_pose();
+
+        let a0 = data.animations[0].name.as_str();
+        let a1 = data.animations[1].name.as_str();
+        state.set_animation(0, a0, true).expect("set track0");
+        let entry = state.set_animation(1, a1, true).expect("set track1");
+        entry.set_mix_blend(&mut state, MixBlend::Add);
+
+        let dt = 0.2;
+        state.update(dt);
+        state.apply(&mut skeleton);
+        skeleton.update_world_transform();
+        assert_skeleton_finite(&skeleton);
+
+        let draw_list = build_draw_list(&skeleton);
+        for v in &draw_list.vertices {
+            assert!(v.position[0].is_finite());
+            assert!(v.position[1].is_finite());
+            assert!(v.uv[0].is_finite());
+            assert!(v.uv[1].is_finite());
+            assert!(v.color[0].is_finite());
+            assert!(v.color[1].is_finite());
+            assert!(v.color[2].is_finite());
+            assert!(v.color[3].is_finite());
+            assert!(v.dark_color[0].is_finite());
+            assert!(v.dark_color[1].is_finite());
+            assert!(v.dark_color[2].is_finite());
+            assert!(v.dark_color[3].is_finite());
+        }
     }
 
     let draw_list = build_draw_list(&skeleton);

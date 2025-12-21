@@ -1,13 +1,13 @@
 use serde_json::json;
 use spine2d::{
-    AnimationState, AnimationStateData, MixBlend, Skeleton, SkeletonData, TrackEntryHandle,
+    AnimationState, AnimationStateData, MixBlend, Physics, Skeleton, SkeletonData, TrackEntryHandle,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
 
 fn print_usage_and_exit() -> ! {
     eprintln!(
-        "Usage:\n  pose_dump_scenario <skeleton.(json|skel)> <commands...>\n\nCommands:\n  --set-skin <name|none>\n  --dump-slot-vertices <slotName>\n  --dump-update-cache\n  --mix <from> <to> <duration>\n  --set <track> <animation> <loop 0|1>\n  --add <track> <animation> <loop 0|1> <delay>\n  --set-empty <track> <mixDuration>\n  --add-empty <track> <mixDuration> <delay>\n  --entry-alpha <alpha>\n  --entry-hold-previous <0|1>\n  --entry-mix-blend <setup|first|replace|add>\n  --entry-reverse <0|1>\n  --entry-shortest-rotation <0|1>\n  --entry-reset-rotation-directions\n  --step <dt>\n"
+        "Usage:\n  pose_dump_scenario <skeleton.(json|skel)> <commands...>\n\nCommands:\n  --set-skin <name|none>\n  --dump-slot-vertices <slotName>\n  --dump-update-cache\n  --mix <from> <to> <duration>\n  --set <track> <animation> <loop 0|1>\n  --add <track> <animation> <loop 0|1> <delay>\n  --set-empty <track> <mixDuration>\n  --add-empty <track> <mixDuration> <delay>\n  --entry-alpha <alpha>\n  --entry-hold-previous <0|1>\n  --entry-mix-blend <setup|first|replace|add>\n  --entry-reverse <0|1>\n  --entry-shortest-rotation <0|1>\n  --entry-reset-rotation-directions\n  --physics <none|reset|update|pose>\n  --step <dt>\n"
     );
     std::process::exit(2);
 }
@@ -40,6 +40,16 @@ fn load_skeleton_data(path: &PathBuf) -> Arc<SkeletonData> {
     SkeletonData::from_json_str(&json).expect("parse json")
 }
 
+fn parse_physics(s: &str) -> Option<Physics> {
+    match s {
+        "none" => Some(Physics::None),
+        "reset" => Some(Physics::Reset),
+        "update" => Some(Physics::Update),
+        "pose" => Some(Physics::Pose),
+        _ => None,
+    }
+}
+
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() {
@@ -55,6 +65,7 @@ fn main() {
     let mut state = AnimationState::new(AnimationStateData::new(data.clone()));
     let mut last_entry: Option<TrackEntryHandle> = None;
     let mut total_time = 0.0f32;
+    let mut physics: Physics = Physics::None;
 
     // Setup pose once; scenario steps do not reset the skeleton each frame.
     skeleton.set_to_setup_pose();
@@ -187,11 +198,18 @@ fn main() {
                     .reset_rotation_directions(&mut state);
                 i += 1;
             }
+            "--physics" if i + 1 < args.len() => {
+                let next = args[i + 1].as_str();
+                physics =
+                    parse_physics(next).unwrap_or_else(|| panic!("invalid physics mode: {next}"));
+                i += 2;
+            }
             "--step" if i + 1 < args.len() => {
                 let dt: f32 = args[i + 1].parse().unwrap();
                 state.update(dt);
                 state.apply(&mut skeleton);
-                skeleton.update_world_transform();
+                skeleton.update(dt);
+                skeleton.update_world_transform_with_physics(physics);
                 total_time += dt;
                 i += 2;
             }

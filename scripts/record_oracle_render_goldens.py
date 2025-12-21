@@ -70,6 +70,16 @@ class RenderCase:
         anim = self.anim.replace("/", "__")
         return f"{self.name}_{anim}_t{self.time}.json"
 
+@dataclass(frozen=True)
+class RenderScenarioCase:
+    name: str
+    atlas: str
+    skeleton: str
+    commands: List[str]
+
+    def golden_name(self) -> str:
+        return f"{self.name}.json"
+
 
 def cases_json() -> List[RenderCase]:
     return [
@@ -207,6 +217,79 @@ def cases_json() -> List[RenderCase]:
         ),
     ]
 
+def scenario_cases_json() -> List[RenderScenarioCase]:
+    return [
+        RenderScenarioCase(
+            name="tank_scn_drive_to_shoot_midmix",
+            atlas="tank/export/tank-pma.atlas",
+            skeleton="tank/export/tank-pro.json",
+            commands=[
+                "--mix",
+                "drive",
+                "shoot",
+                "0.2",
+                "--set",
+                "0",
+                "drive",
+                "1",
+                "--step",
+                "0.1",
+                "--set",
+                "0",
+                "shoot",
+                "0",
+                "--step",
+                "0.1",
+            ],
+        ),
+        RenderScenarioCase(
+            name="spineboy_scn_idle_to_shoot_midmix",
+            atlas="spineboy/export/spineboy-pma.atlas",
+            skeleton="spineboy/export/spineboy-pro.json",
+            commands=[
+                "--mix",
+                "idle",
+                "shoot",
+                "0.2",
+                "--set",
+                "0",
+                "idle",
+                "1",
+                "--step",
+                "0.1",
+                "--set",
+                "0",
+                "shoot",
+                "0",
+                "--step",
+                "0.1",
+            ],
+        ),
+        RenderScenarioCase(
+            name="tank_scn_drive_plus_shoot_add_alpha0_5_t0_4",
+            atlas="tank/export/tank-pma.atlas",
+            skeleton="tank/export/tank-pro.json",
+            commands=[
+                "--set",
+                "0",
+                "drive",
+                "1",
+                "--step",
+                "0.1",
+                "--set",
+                "1",
+                "shoot",
+                "0",
+                "--entry-mix-blend",
+                "add",
+                "--entry-alpha",
+                "0.5",
+                "--step",
+                "0.3",
+            ],
+        ),
+    ]
+
 
 def cases_skel() -> List[RenderCase]:
     out = []
@@ -225,6 +308,23 @@ def cases_skel() -> List[RenderCase]:
                 looped=c.looped,
                 skin=c.skin,
                 physics=c.physics,
+            )
+        )
+    return out
+
+def scenario_cases_skel() -> List[RenderScenarioCase]:
+    out = []
+    for c in scenario_cases_json():
+        if c.skeleton.endswith(".json"):
+            skel = c.skeleton[:-5] + ".skel"
+        else:
+            skel = c.skeleton.replace(".json", ".skel")
+        out.append(
+            RenderScenarioCase(
+                name=c.name,
+                atlas=c.atlas,
+                skeleton=skel,
+                commands=c.commands,
             )
         )
     return out
@@ -258,6 +358,19 @@ def record_one(examples_root: Path, out_dir: Path, case: RenderCase) -> None:
     out_path = out_dir / case.golden_name()
     out_path.write_text(out, encoding="utf-8")
 
+def record_one_scenario(examples_root: Path, out_dir: Path, case: RenderScenarioCase) -> None:
+    atlas = examples_root / case.atlas
+    skeleton = examples_root / case.skeleton
+    if not atlas.is_file():
+        raise FileNotFoundError(f"missing atlas: {atlas}")
+    if not skeleton.is_file():
+        raise FileNotFoundError(f"missing skeleton: {skeleton}")
+
+    args = [str(atlas), str(skeleton), *case.commands]
+    out = _run_oracle(args)
+    out_path = out_dir / case.golden_name()
+    out_path.write_text(out, encoding="utf-8")
+
 
 def write_source(out_dir: Path, *, commit: str, fmt: str) -> None:
     now = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
@@ -273,6 +386,7 @@ def write_source(out_dir: Path, *, commit: str, fmt: str) -> None:
                 "Status: OK",
                 "Notes:",
                 "  These files are render-dump goldens produced by the C++ render oracle.",
+                "  Both legacy (--anim/--time) and scenario (--set/--step) cases may be present.",
                 "  Re-record when the upstream baseline commit changes.",
                 "",
             ]
@@ -307,6 +421,15 @@ def main() -> int:
                 print(f"FAIL {c.name} (json): {e}", file=sys.stderr)
                 if not args.keep_going:
                     return 1
+        for c in scenario_cases_json():
+            try:
+                record_one_scenario(examples_root, out_json, c)
+                print(f"Wrote {out_json / c.golden_name()}")
+            except Exception as e:
+                failures += 1
+                print(f"FAIL {c.name} (json scenario): {e}", file=sys.stderr)
+                if not args.keep_going:
+                    return 1
 
     if args.formats in ("skel", "all"):
         out_skel.mkdir(parents=True, exist_ok=True)
@@ -318,6 +441,15 @@ def main() -> int:
             except Exception as e:
                 failures += 1
                 print(f"FAIL {c.name} (skel): {e}", file=sys.stderr)
+                if not args.keep_going:
+                    return 1
+        for c in scenario_cases_skel():
+            try:
+                record_one_scenario(examples_root, out_skel, c)
+                print(f"Wrote {out_skel / c.golden_name()}")
+            except Exception as e:
+                failures += 1
+                print(f"FAIL {c.name} (skel scenario): {e}", file=sys.stderr)
                 if not args.keep_going:
                     return 1
 
