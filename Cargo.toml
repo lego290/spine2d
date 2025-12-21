@@ -1,0 +1,28 @@
+[workspace]
+resolver = "2"
+members = [
+    "spine2d",
+    "spine2d-wgpu",
+    "spine2d-web",
+]
+exclude = [
+    "repo-ref/**",
+]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.85"
+authors = ["Mingzhen Zhuang <superfrankie621@gmail.com>"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Latias94/spine2d"
+homepage = "https://github.com/Latias94/spine2d"
+documentation = "https://docs.rs/spine2d"
+
+[workspace.dependencies]
+thiserror = "2.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+byteorder = "1"
+glam = "0.30"
+wgpu = "27.0"
+bytemuck = { version = "1", features = ["derive"] }

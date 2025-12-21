@@ -1,0 +1,45 @@
+[package]
+name = "spine2d-wgpu"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/spine2d-wgpu"
+description = "wgpu renderer integration for the spine2d runtime"
+readme = "../README.md"
+keywords = ["spine", "spine2d", "wgpu", "animation", "skeletal"]
+categories = ["game-development", "rendering"]
+
+[dependencies]
+spine2d = { path = "../spine2d", version = "0.1.0", default-features = false }
+wgpu.workspace = true
+bytemuck.workspace = true
+
+[features]
+default = []
+json = ["spine2d/json"]
+
+[dev-dependencies]
+winit = "0.30"
+pollster = "0.4"
+image = { version = "0.25", default-features = false, features = ["png"] }
+egui = "0.33.3"
+egui-winit = "0.33.3"
+egui-wgpu = { version = "0.33.3", features = ["winit"] }
+
+[[example]]
+name = "basic"
+required-features = ["json"]
+
+[[example]]
+name = "spine_runtimes"
+required-features = ["json"]
+
+[package.metadata.docs.rs]
+no-default-features = true
+all-features = false
+features = []
+rustdoc-args = ["--cfg", "docsrs"]

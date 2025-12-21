@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>spine2d-web</title>
+    <base data-trunk-public-url />
+    <style>
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #0b0b0b;
+      }
+      #ui {
+        position: fixed;
+        left: 12px;
+        top: 12px;
+        z-index: 10;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 10px;
+        align-items: center;
+        padding: 10px 12px;
+        border-radius: 10px;
+        background: rgba(20, 20, 20, 0.75);
+        color: #e7e7e7;
+        font: 12px/1.2 ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial,
+          "Apple Color Emoji", "Segoe UI Emoji";
+        user-select: none;
+        backdrop-filter: blur(6px);
+      }
+      #ui label {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+      #ui button,
+      #ui select {
+        background: #1b1b1b;
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        color: inherit;
+        padding: 6px 10px;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+      #ui button:hover,
+      #ui select:hover {
+        border-color: rgba(255, 255, 255, 0.3);
+      }
+      #speed {
+        width: 140px;
+      }
+      canvas {
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="ui">
+      <button id="btn-play" type="button">Pause</button>
+      <button id="btn-restart" type="button">Restart</button>
+      <button id="btn-fit" type="button">Fit</button>
+      <label>
+        Example
+        <select id="example"></select>
+      </label>
+      <label>
+        Speed
+        <input id="speed" type="range" min="0" max="2" step="0.01" value="1" />
+        <span id="speed-value">1.00</span>
+      </label>
+      <label>
+        Animation
+        <select id="anim"></select>
+      </label>
+      <label>
+        Skin
+        <select id="skin"></select>
+      </label>
+    </div>
+    <canvas id="spine2d-canvas"></canvas>
+    <link data-trunk rel="copy-dir" href="assets" />
+    <link data-trunk rel="copy-dir" href="../assets/spine-runtimes" data-target-path="assets/spine-runtimes" />
+    <link data-trunk rel="rust" href="Cargo.toml" data-wasm-opt="z" />
+  </body>
+</html>

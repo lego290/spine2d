@@ -1,0 +1,8 @@
+page.png
+size: 64,64
+
+mesh0
+  rotate: false
+  xy: 0, 0
+  size: 64, 64
+

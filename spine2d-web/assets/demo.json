@@ -1,0 +1,31 @@
+{
+  "skeleton": { "spine": "4.3.00" },
+  "bones": [ { "name": "root" } ],
+  "slots": [ { "name": "slot0", "bone": "root", "attachment": "mesh0" } ],
+  "skins": {
+    "default": {
+      "slot0": {
+        "mesh0": {
+          "type": "mesh",
+          "path": "mesh0",
+          "uvs": [0,0, 1,0, 1,1, 0,1],
+          "vertices": [-128,-128, 128,-128, 128,128, -128,128],
+          "triangles": [0,1,2, 2,3,0]
+        }
+      }
+    }
+  },
+  "animations": {
+    "spin": {
+      "bones": {
+        "root": {
+          "rotate": [
+            { "time": 0, "angle": 0 },
+            { "time": 1, "angle": 360 }
+          ]
+        }
+      }
+    }
+  }
+}
+

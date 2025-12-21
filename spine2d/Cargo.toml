@@ -1,0 +1,54 @@
+[package]
+name = "spine2d"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+description = "Pure Rust runtime for Spine 4.3 (unofficial)"
+readme = "../README.md"
+keywords = ["spine", "spine2d", "animation", "skeletal"]
+categories = ["game-development", "rendering"]
+exclude = [
+    # Oracle goldens are for repo development; keep published crate lean.
+    "tests/**",
+]
+
+[dependencies]
+thiserror.workspace = true
+
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+byteorder.workspace = true
+glam = { workspace = true, optional = true }
+
+[features]
+default = []
+json = ["dep:serde", "dep:serde_json"]
+binary = []
+glam = ["dep:glam"]
+upstream-smoke = []
+
+[package.metadata.docs.rs]
+no-default-features = true
+all-features = false
+features = []
+rustdoc-args = ["--cfg", "docsrs"]
+
+[[example]]
+name = "pose_dump"
+path = "examples/pose_dump.rs"
+required-features = ["json"]
+
+[[example]]
+name = "pose_dump_scenario"
+path = "examples/pose_dump_scenario.rs"
+required-features = ["json"]
+
+[[example]]
+name = "render_dump"
+path = "examples/render_dump.rs"
+required-features = ["json"]

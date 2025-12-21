@@ -1,0 +1,102 @@
+use crate::{Skeleton, SkeletonData};
+
+const SKELETON_IK_TWO_BONES: &str = r#"
+{
+  "skeleton": { "spine": "4.3.00" },
+  "bones": [
+    { "name": "root" },
+    { "name": "p", "parent": "root", "length": 1, "x": 0, "y": 0 },
+    { "name": "c", "parent": "p", "length": 1, "x": 1, "y": 0 },
+    { "name": "t", "parent": "root", "x": 1, "y": 1 }
+  ],
+  "slots": [],
+  "skins": {},
+  "ik": [
+    { "name": "ik", "bones": ["p", "c"], "target": "t", "mix": 1, "bendPositive": true }
+  ],
+  "animations": {}
+}
+"#;
+
+const SKELETON_IK_ONE_BONE: &str = r#"
+{
+  "skeleton": { "spine": "4.3.00" },
+  "bones": [
+    { "name": "root" },
+    { "name": "p", "parent": "root", "length": 1, "x": 0, "y": 0 },
+    { "name": "t", "parent": "root", "x": 0, "y": 1 }
+  ],
+  "slots": [],
+  "skins": {},
+  "ik": [
+    { "name": "ik", "bones": ["p"], "target": "t", "mix": 1, "bendPositive": true }
+  ],
+  "animations": {}
+}
+"#;
+
+const SKELETON_IK_DEFAULT_BEND_POSITIVE: &str = r#"
+{
+  "skeleton": { "spine": "4.3.00" },
+  "bones": [
+    { "name": "root" },
+    { "name": "p", "parent": "root", "length": 1, "x": 0, "y": 0 },
+    { "name": "t", "parent": "root", "x": 0, "y": 1 }
+  ],
+  "slots": [],
+  "skins": {},
+  "ik": [
+    { "name": "ik", "bones": ["p"], "target": "t", "mix": 1 }
+  ],
+  "animations": {}
+}
+"#;
+
+fn assert_approx(actual: f32, expected: f32) {
+    let diff = (actual - expected).abs();
+    assert!(
+        diff <= 1.0e-3,
+        "expected {expected}, got {actual} (diff {diff})"
+    );
+}
+
+#[test]
+fn ik_two_bones_moves_end_effector_close_to_target() {
+    let data = SkeletonData::from_json_str(SKELETON_IK_TWO_BONES).unwrap();
+    let mut skeleton = Skeleton::new(data);
+    skeleton.set_to_setup_pose();
+    skeleton.update_world_transform();
+
+    let target = &skeleton.bones[3];
+    let child = &skeleton.bones[2];
+    let child_len = skeleton.data.bones[2].length;
+    let tip_x = child.a * child_len + child.world_x;
+    let tip_y = child.c * child_len + child.world_y;
+
+    assert_approx(tip_x, target.world_x);
+    assert_approx(tip_y, target.world_y);
+}
+
+#[test]
+fn ik_one_bone_rotates_toward_target() {
+    let data = SkeletonData::from_json_str(SKELETON_IK_ONE_BONE).unwrap();
+    let mut skeleton = Skeleton::new(data);
+    skeleton.set_to_setup_pose();
+    skeleton.update_world_transform();
+
+    let target = &skeleton.bones[2];
+    let bone = &skeleton.bones[1];
+    let bone_len = skeleton.data.bones[1].length;
+    let tip_x = bone.a * bone_len + bone.world_x;
+    let tip_y = bone.c * bone_len + bone.world_y;
+
+    assert_approx(tip_x, target.world_x);
+    assert_approx(tip_y, target.world_y);
+}
+
+#[test]
+fn ik_constraint_bend_positive_defaults_to_true() {
+    let data = SkeletonData::from_json_str(SKELETON_IK_DEFAULT_BEND_POSITIVE).unwrap();
+    assert_eq!(data.ik_constraints.len(), 1);
+    assert_eq!(data.ik_constraints[0].bend_direction, 1);
+}

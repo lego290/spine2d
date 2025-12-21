@@ -1,0 +1,101 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test Before Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run tests (spine2d)
+        run: cargo test -p spine2d --features json,binary
+
+      - name: Clippy (spine2d)
+        run: cargo clippy -p spine2d --features json,binary -- -D warnings
+
+      - name: Clippy (spine2d-wgpu)
+        run: cargo clippy -p spine2d-wgpu --features json -- -D warnings
+
+  publish:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Publish spine2d
+        run: cargo publish -p spine2d --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      # crates.io index propagation can be eventually consistent; retry a few times.
+      - name: Publish spine2d-wgpu (retry)
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in {1..10}; do
+            echo "Attempt $i/10: cargo publish -p spine2d-wgpu"
+            if cargo publish -p spine2d-wgpu --token "${{ secrets.CARGO_REGISTRY_TOKEN }}"; then
+              exit 0
+            fi
+            echo "Publish failed (likely index not updated yet). Sleeping..."
+            sleep 20
+          done
+          exit 1
+
+  github-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: publish
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract release notes from CHANGELOG.md
+        id: notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk -v ver="$VERSION" '
+            $0 ~ "^## "ver"$" {found=1; next}
+            found && $0 ~ "^## " {exit}
+            found {print}
+          ' CHANGELOG.md > /tmp/release_notes.txt
+          if [ ! -s /tmp/release_notes.txt ]; then
+            echo "No changelog section found for $VERSION; using tag only." > /tmp/release_notes.txt
+          fi
+          echo "notes_file=/tmp/release_notes.txt" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --notes-file "${{ steps.notes.outputs.notes_file }}"
+

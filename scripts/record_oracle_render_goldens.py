@@ -1,0 +1,331 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import os
+import subprocess
+import sys
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import List, Optional
+
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+ORACLE_RUNNER = ROOT_DIR / "scripts" / "run_spine_cpp_lite_render_oracle.zsh"
+
+
+def find_examples_root() -> Path:
+    env = os.environ.get("SPINE2D_UPSTREAM_EXAMPLES_DIR", "").strip()
+    if env:
+        p = Path(env)
+        if p.is_dir():
+            return p
+
+    candidates = [
+        ROOT_DIR / "assets" / "spine-runtimes" / "examples",
+        ROOT_DIR / "third_party" / "spine-runtimes" / "examples",
+        ROOT_DIR / ".cache" / "spine-runtimes" / "examples",
+    ]
+    for p in candidates:
+        if p.is_dir():
+            return p
+    raise SystemExit(
+        "Missing upstream Spine examples. Run `python3 ./scripts/prepare_spine_runtimes_web_assets.py --scope tests` "
+        "or set SPINE2D_UPSTREAM_EXAMPLES_DIR."
+    )
+
+
+def read_pinned_commit() -> str:
+    source = ROOT_DIR / "assets" / "spine-runtimes" / "SOURCE.txt"
+    if not source.is_file():
+        return "unknown"
+    for line in source.read_text(encoding="utf-8").splitlines():
+        if line.startswith("Commit:"):
+            return line.split(":", 1)[1].strip()
+    return "unknown"
+
+
+def _run_oracle(args: List[str]) -> str:
+    cmd = [str(ORACLE_RUNNER), *args]
+    try:
+        return subprocess.check_output(cmd, cwd=str(ROOT_DIR), text=True)
+    except subprocess.CalledProcessError as e:
+        out = (e.stdout or "") + (e.stderr or "")
+        raise RuntimeError(f"oracle failed: {' '.join(cmd)}\n{out}") from e
+
+
+@dataclass(frozen=True)
+class RenderCase:
+    name: str
+    atlas: str
+    skeleton: str
+    anim: str
+    time: str
+    looped: str = "1"
+    skin: Optional[str] = None
+    physics: str = "none"
+
+    def golden_name(self) -> str:
+        anim = self.anim.replace("/", "__")
+        return f"{self.name}_{anim}_t{self.time}.json"
+
+
+def cases_json() -> List[RenderCase]:
+    return [
+        RenderCase(
+            name="coin",
+            atlas="coin/export/coin-pma.atlas",
+            skeleton="coin/export/coin-pro.json",
+            anim="animation",
+            time="0_3",
+        ),
+        RenderCase(
+            name="coin_nonpma",
+            atlas="coin/export/coin.atlas",
+            skeleton="coin/export/coin-pro.json",
+            anim="animation",
+            time="0_3",
+        ),
+        RenderCase(
+            name="spineboy",
+            atlas="spineboy/export/spineboy-pma.atlas",
+            skeleton="spineboy/export/spineboy-pro.json",
+            anim="run",
+            time="0_2",
+        ),
+        RenderCase(
+            name="spineboy_nonpma",
+            atlas="spineboy/export/spineboy.atlas",
+            skeleton="spineboy/export/spineboy-pro.json",
+            anim="run",
+            time="0_2",
+        ),
+        RenderCase(
+            name="alien",
+            atlas="alien/export/alien-pma.atlas",
+            skeleton="alien/export/alien-pro.json",
+            anim="run",
+            time="0_3",
+        ),
+        RenderCase(
+            name="dragon",
+            atlas="dragon/export/dragon-pma.atlas",
+            skeleton="dragon/export/dragon-ess.json",
+            anim="flying",
+            time="0_25",
+        ),
+        RenderCase(
+            name="goblins",
+            atlas="goblins/export/goblins-pma.atlas",
+            skeleton="goblins/export/goblins-pro.json",
+            anim="walk",
+            time="0_3",
+        ),
+        RenderCase(
+            name="hero",
+            atlas="hero/export/hero-pma.atlas",
+            skeleton="hero/export/hero-pro.json",
+            anim="idle",
+            time="0_55",
+        ),
+        RenderCase(
+            name="hero_nonpma",
+            atlas="hero/export/hero.atlas",
+            skeleton="hero/export/hero-pro.json",
+            anim="idle",
+            time="0_55",
+        ),
+        RenderCase(
+            name="mix_and_match_boy_pma",
+            atlas="mix-and-match/export/mix-and-match-pma.atlas",
+            skeleton="mix-and-match/export/mix-and-match-pro.json",
+            anim="walk",
+            time="0_1667",
+            skin="full-skins/boy",
+        ),
+        RenderCase(
+            name="mix_and_match_girl_pma",
+            atlas="mix-and-match/export/mix-and-match-pma.atlas",
+            skeleton="mix-and-match/export/mix-and-match-pro.json",
+            anim="walk",
+            time="0_1667",
+            skin="full-skins/girl",
+        ),
+        RenderCase(
+            name="mix_and_match_boy_nonpma",
+            atlas="mix-and-match/export/mix-and-match.atlas",
+            skeleton="mix-and-match/export/mix-and-match-pro.json",
+            anim="walk",
+            time="0_1667",
+            skin="full-skins/boy",
+        ),
+        RenderCase(
+            name="mix_and_match_girl_nonpma",
+            atlas="mix-and-match/export/mix-and-match.atlas",
+            skeleton="mix-and-match/export/mix-and-match-pro.json",
+            anim="walk",
+            time="0_1667",
+            skin="full-skins/girl",
+        ),
+        RenderCase(
+            name="vine",
+            atlas="vine/export/vine-pma.atlas",
+            skeleton="vine/export/vine-pro.json",
+            anim="grow",
+            time="0_5",
+        ),
+        RenderCase(
+            name="tank",
+            atlas="tank/export/tank-pma.atlas",
+            skeleton="tank/export/tank-pro.json",
+            anim="shoot",
+            time="0_3",
+        ),
+        RenderCase(
+            name="chibi",
+            atlas="chibi-stickers/export/chibi-stickers-pma.atlas",
+            skeleton="chibi-stickers/export/chibi-stickers.json",
+            anim="movement/idle-front",
+            time="0_3",
+        ),
+        RenderCase(
+            name="chibi_davide_pma",
+            atlas="chibi-stickers/export/chibi-stickers-pma.atlas",
+            skeleton="chibi-stickers/export/chibi-stickers.json",
+            anim="movement/idle-front",
+            time="0_3",
+            skin="davide",
+        ),
+        RenderCase(
+            name="chibi_davide_nonpma",
+            atlas="chibi-stickers/export/chibi-stickers.atlas",
+            skeleton="chibi-stickers/export/chibi-stickers.json",
+            anim="movement/idle-front",
+            time="0_3",
+            skin="davide",
+        ),
+    ]
+
+
+def cases_skel() -> List[RenderCase]:
+    out = []
+    for c in cases_json():
+        if c.skeleton.endswith(".json"):
+            skel = c.skeleton[:-5] + ".skel"
+        else:
+            skel = c.skeleton.replace(".json", ".skel")
+        out.append(
+            RenderCase(
+                name=c.name,
+                atlas=c.atlas,
+                skeleton=skel,
+                anim=c.anim,
+                time=c.time,
+                looped=c.looped,
+                skin=c.skin,
+                physics=c.physics,
+            )
+        )
+    return out
+
+
+def record_one(examples_root: Path, out_dir: Path, case: RenderCase) -> None:
+    atlas = examples_root / case.atlas
+    skeleton = examples_root / case.skeleton
+    if not atlas.is_file():
+        raise FileNotFoundError(f"missing atlas: {atlas}")
+    if not skeleton.is_file():
+        raise FileNotFoundError(f"missing skeleton: {skeleton}")
+
+    time_cli = case.time.replace("_", ".")
+    args = [
+        str(atlas),
+        str(skeleton),
+        "--anim",
+        case.anim,
+        "--time",
+        time_cli,
+        "--loop",
+        case.looped,
+        "--physics",
+        case.physics,
+    ]
+    if case.skin is not None:
+        args.extend(["--skin", case.skin])
+
+    out = _run_oracle(args)
+    out_path = out_dir / case.golden_name()
+    out_path.write_text(out, encoding="utf-8")
+
+
+def write_source(out_dir: Path, *, commit: str, fmt: str) -> None:
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "SOURCE.txt").write_text(
+        "\n".join(
+            [
+                "Source: https://github.com/EsotericSoftware/spine-runtimes",
+                "Branch: 4.3-beta",
+                f"TargetCommit: {commit}",
+                f"RecordedAtUTC: {now}",
+                f"Format: {fmt}",
+                "Status: OK",
+                "Notes:",
+                "  These files are render-dump goldens produced by the C++ render oracle.",
+                "  Re-record when the upstream baseline commit changes.",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="Record C++ render oracle goldens for spine2d.")
+    ap.add_argument("--formats", choices=["json", "skel", "all"], default="all")
+    ap.add_argument("--keep-going", action="store_true")
+    args = ap.parse_args()
+
+    examples_root = find_examples_root()
+    commit = read_pinned_commit()
+
+    out_json = ROOT_DIR / "spine2d" / "tests" / "golden" / "render_oracle_scenarios"
+    out_skel = ROOT_DIR / "spine2d" / "tests" / "golden" / "render_oracle_scenarios_skel"
+
+    failures = 0
+
+    if args.formats in ("json", "all"):
+        out_json.mkdir(parents=True, exist_ok=True)
+        write_source(out_json, commit=commit, fmt="json")
+        for c in cases_json():
+            try:
+                record_one(examples_root, out_json, c)
+                print(f"Wrote {out_json / c.golden_name()}")
+            except Exception as e:
+                failures += 1
+                print(f"FAIL {c.name} (json): {e}", file=sys.stderr)
+                if not args.keep_going:
+                    return 1
+
+    if args.formats in ("skel", "all"):
+        out_skel.mkdir(parents=True, exist_ok=True)
+        write_source(out_skel, commit=commit, fmt="skel")
+        for c in cases_skel():
+            try:
+                record_one(examples_root, out_skel, c)
+                print(f"Wrote {out_skel / c.golden_name()}")
+            except Exception as e:
+                failures += 1
+                print(f"FAIL {c.name} (skel): {e}", file=sys.stderr)
+                if not args.keep_going:
+                    return 1
+
+    if failures:
+        print(f"Completed with failures: {failures}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

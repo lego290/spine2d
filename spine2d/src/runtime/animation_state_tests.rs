@@ -1,0 +1,3003 @@
+use crate::Skeleton;
+use crate::runtime::{
+    AnimationState, AnimationStateData, AnimationStateEvent, AnimationStateListener,
+    TrackEntryListener, TrackEntrySnapshot,
+};
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+
+const TEST_JSON: &str = r#"
+{
+  "skeleton": { "spine": "4.3.00" },
+  "bones": [ { "name": "root" } ],
+  "events": { "event": {} },
+  "animations": {
+    "events0": {
+      "events": [
+        { "name": "event", "string": "0" },
+        { "time": 0.4667, "name": "event", "string": "14" },
+        { "time": 1.0, "name": "event", "string": "30" }
+      ]
+    },
+    "events1": {
+      "events": [
+        { "name": "event", "string": "0" },
+        { "time": 0.4667, "name": "event", "string": "14" },
+        { "time": 1.0, "name": "event", "string": "30" }
+      ]
+    },
+    "events2": {
+      "events": [
+        { "name": "event", "string": "0" },
+        { "time": 0.4667, "name": "event", "string": "14" },
+        { "time": 1.0, "name": "event", "string": "30" }
+      ]
+    }
+  }
+}
+"#;
+
+#[derive(Clone, Debug, PartialEq)]
+struct ResultRow {
+    animation_index: i32,
+    name: String,
+    track_time: f32,
+    total_time: f32,
+}
+
+#[derive(Clone)]
+struct Recording {
+    time: Rc<Cell<f32>>,
+    enabled: Rc<Cell<bool>>,
+    rows: Rc<RefCell<Vec<ResultRow>>>,
+}
+
+struct RecordingListener {
+    recording: Recording,
+}
+
+impl AnimationStateListener for RecordingListener {
+    fn on_event(
+        &mut self,
+        _state: &mut AnimationState,
+        entry: &TrackEntrySnapshot,
+        event: &AnimationStateEvent,
+    ) {
+        if !self.recording.enabled.get() {
+            return;
+        }
+        let name = match event {
+            AnimationStateEvent::Start => "start".to_string(),
+            AnimationStateEvent::Interrupt => "interrupt".to_string(),
+            AnimationStateEvent::End => "end".to_string(),
+            AnimationStateEvent::Dispose => "dispose".to_string(),
+            AnimationStateEvent::Complete => "complete".to_string(),
+            AnimationStateEvent::Event(ev) => format!("event {}", ev.string),
+        };
+
+        self.recording.rows.borrow_mut().push(ResultRow {
+            animation_index: entry.animation_index,
+            name,
+            track_time: round3(entry.track_time),
+            total_time: round3(self.recording.time.get()),
+        });
+    }
+}
+
+fn round3(value: f32) -> f32 {
+    (value * 1000.0).round() / 1000.0
+}
+
+fn setup() -> (AnimationState, Skeleton, Recording) {
+    let data = crate::SkeletonData::from_json_str(TEST_JSON).unwrap();
+    let state_data = AnimationStateData::new(data.clone());
+    let state = AnimationState::new(state_data);
+    let skeleton = Skeleton::new(data);
+    let recording = Recording {
+        time: Rc::new(Cell::new(0.0)),
+        enabled: Rc::new(Cell::new(true)),
+        rows: Rc::new(RefCell::new(Vec::new())),
+    };
+    (state, skeleton, recording)
+}
+
+const EMPTY_DELAY_JSON: &str = r#"
+{
+  "skeleton": { "spine": "4.3.00" },
+  "bones": [ { "name": "root" } ],
+  "animations": {
+    "a": {
+      "bones": {
+        "root": {
+          "rotate": [
+            { "time": 0.0, "value": 0.0 },
+            { "time": 1.0, "value": 0.0 }
+          ]
+        }
+      }
+    }
+  }
+}
+"#;
+
+fn run(
+    state: &mut AnimationState,
+    skeleton: &mut Skeleton,
+    recording: &Recording,
+    step: f32,
+    end_time: f32,
+) {
+    run_with_frame(state, skeleton, recording, step, end_time, |_, _| {});
+}
+
+fn run_with_frame<F: FnMut(f32, &mut AnimationState)>(
+    state: &mut AnimationState,
+    skeleton: &mut Skeleton,
+    recording: &Recording,
+    step: f32,
+    end_time: f32,
+    mut on_frame: F,
+) {
+    recording.time.set(0.0);
+    recording.enabled.set(true);
+    state.apply(skeleton);
+
+    let mut time = 0.0;
+    while time < end_time {
+        time += step;
+        recording.time.set(time);
+        state.update(step);
+        state.round_tracks_for_tests();
+        // Match the upstream C# tests: apply multiple times per frame to ensure the state doesn't depend on apply side effects.
+        recording.enabled.set(true);
+        state.apply(skeleton);
+        recording.enabled.set(false);
+        state.apply(skeleton);
+        state.apply(skeleton);
+        recording.enabled.set(true);
+        on_frame(round3(time), state);
+    }
+}
+
+#[test]
+fn add_empty_animation_delay_is_adjusted_to_end_with_previous_entry() {
+    let data = crate::SkeletonData::from_json_str(EMPTY_DELAY_JSON).unwrap();
+    let state_data = AnimationStateData::new(data.clone());
+    let mut state = AnimationState::new(state_data);
+    let mut skeleton = Skeleton::new(data);
+
+    let recording = Recording {
+        time: Rc::new(Cell::new(0.0)),
+        enabled: Rc::new(Cell::new(true)),
+        rows: Rc::new(RefCell::new(Vec::new())),
+    };
+    state.set_listener(RecordingListener {
+        recording: recording.clone(),
+    });
+
+    state.set_animation(0, "a", false).unwrap();
+    state.add_empty_animation(0, 0.5, 0.0).unwrap();
+    let delay = state
+        .queue_front_delay_for_tests(0)
+        .expect("queued empty entry");
+    assert_eq!(round3(delay), 0.5);
+
+    // Smoke-run the state to ensure the queue can actually be consumed without panics.
+    run(&mut state, &mut skeleton, &recording, 0.1, 1.2);
+}
+
+#[test]
+fn events_0p1_time_step() {
+    let (mut state, mut skeleton, recording) = setup();
+    state.set_listener(RecordingListener {
+        recording: recording.clone(),
+    });
+
+    let entry = state.set_animation(0, "events0", false).unwrap();
+    entry.set_track_end(&mut state, 1.0);
+
+    run(&mut state, &mut skeleton, &recording, 0.1, 2.0);
+
+    let expected = vec![
+        ResultRow {
+            animation_index: 0,
+            name: "start".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 0".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 14".into(),
+            track_time: 0.5,
+            total_time: 0.5,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 30".into(),
+            track_time: 1.0,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "complete".into(),
+            track_time: 1.0,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "end".into(),
+            track_time: 1.0,
+            total_time: 1.1,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "dispose".into(),
+            track_time: 1.0,
+            total_time: 1.1,
+        },
+    ];
+
+    assert_eq!(*recording.rows.borrow(), expected);
+}
+
+#[test]
+fn events_30_time_step() {
+    let (mut state, mut skeleton, recording) = setup();
+    state.set_listener(RecordingListener {
+        recording: recording.clone(),
+    });
+
+    let entry = state.set_animation(0, "events0", false).unwrap();
+    entry.set_track_end(&mut state, 1.0);
+
+    recording.time.set(0.0);
+    state.apply(&mut skeleton);
+
+    recording.time.set(30.0);
+    state.update(30.0);
+    state.apply(&mut skeleton);
+
+    recording.time.set(60.0);
+    state.update(30.0);
+    state.apply(&mut skeleton);
+
+    let expected = vec![
+        ResultRow {
+            animation_index: 0,
+            name: "start".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 0".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 14".into(),
+            track_time: 30.0,
+            total_time: 30.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 30".into(),
+            track_time: 30.0,
+            total_time: 30.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "complete".into(),
+            track_time: 30.0,
+            total_time: 30.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "end".into(),
+            track_time: 30.0,
+            total_time: 60.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "dispose".into(),
+            track_time: 30.0,
+            total_time: 60.0,
+        },
+    ];
+
+    assert_eq!(*recording.rows.borrow(), expected);
+}
+
+#[test]
+fn events_1_time_step() {
+    let (mut state, mut skeleton, recording) = setup();
+    state.set_listener(RecordingListener {
+        recording: recording.clone(),
+    });
+
+    let entry = state.set_animation(0, "events0", false).unwrap();
+    entry.set_track_end(&mut state, 1.0);
+
+    run(&mut state, &mut skeleton, &recording, 1.0, 1.01);
+
+    let expected = vec![
+        ResultRow {
+            animation_index: 0,
+            name: "start".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 0".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 14".into(),
+            track_time: 1.0,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 30".into(),
+            track_time: 1.0,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "complete".into(),
+            track_time: 1.0,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "end".into(),
+            track_time: 1.0,
+            total_time: 2.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "dispose".into(),
+            track_time: 1.0,
+            total_time: 2.0,
+        },
+    ];
+
+    assert_eq!(*recording.rows.borrow(), expected);
+}
+
+#[test]
+fn dispose_queued_entries_and_run_1_over_60() {
+    let (mut state, mut skeleton, recording) = setup();
+    state.set_listener(RecordingListener {
+        recording: recording.clone(),
+    });
+
+    state.set_animation(0, "events0", false).unwrap();
+    state.add_animation(0, "events1", false, 0.0).unwrap();
+    state.add_animation(0, "events0", false, 0.0).unwrap();
+    state.add_animation(0, "events1", false, 0.0).unwrap();
+    let entry = state.set_animation(0, "events0", false).unwrap();
+    entry.set_track_end(&mut state, 1.0);
+
+    run(&mut state, &mut skeleton, &recording, 1.0 / 60.0, 1.2);
+
+    let expected = vec![
+        ResultRow {
+            animation_index: 0,
+            name: "start".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "interrupt".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "end".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "dispose".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "dispose".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "dispose".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "dispose".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "start".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 0".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 14".into(),
+            track_time: 0.483,
+            total_time: 0.483,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 30".into(),
+            track_time: 1.0,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "complete".into(),
+            track_time: 1.0,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "end".into(),
+            track_time: 1.0,
+            total_time: 1.017,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "dispose".into(),
+            track_time: 1.0,
+            total_time: 1.017,
+        },
+    ];
+
+    let rows = recording.rows.borrow();
+    assert_eq!(&**rows, expected);
+}
+
+#[test]
+fn interrupt_chain_delay_0() {
+    let (mut state, mut skeleton, recording) = setup();
+    state.set_listener(RecordingListener {
+        recording: recording.clone(),
+    });
+
+    state.set_animation(0, "events0", false).unwrap();
+    state.add_animation(0, "events1", false, 0.0).unwrap();
+    let entry = state.add_animation(0, "events0", false, 0.0).unwrap();
+    entry.set_track_end(&mut state, 1.0);
+
+    run(&mut state, &mut skeleton, &recording, 0.1, 4.0);
+
+    let expected = vec![
+        ResultRow {
+            animation_index: 0,
+            name: "start".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 0".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 14".into(),
+            track_time: 0.5,
+            total_time: 0.5,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 30".into(),
+            track_time: 1.0,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "complete".into(),
+            track_time: 1.0,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "interrupt".into(),
+            track_time: 1.1,
+            total_time: 1.1,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "start".into(),
+            track_time: 0.1,
+            total_time: 1.1,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "event 0".into(),
+            track_time: 0.1,
+            total_time: 1.1,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "end".into(),
+            track_time: 1.1,
+            total_time: 1.2,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "dispose".into(),
+            track_time: 1.1,
+            total_time: 1.2,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "event 14".into(),
+            track_time: 0.5,
+            total_time: 1.5,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "event 30".into(),
+            track_time: 1.0,
+            total_time: 2.0,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "complete".into(),
+            track_time: 1.0,
+            total_time: 2.0,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "interrupt".into(),
+            track_time: 1.1,
+            total_time: 2.1,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "start".into(),
+            track_time: 0.1,
+            total_time: 2.1,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 0".into(),
+            track_time: 0.1,
+            total_time: 2.1,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "end".into(),
+            track_time: 1.1,
+            total_time: 2.2,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "dispose".into(),
+            track_time: 1.1,
+            total_time: 2.2,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 14".into(),
+            track_time: 0.5,
+            total_time: 2.5,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 30".into(),
+            track_time: 1.0,
+            total_time: 3.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "complete".into(),
+            track_time: 1.0,
+            total_time: 3.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "end".into(),
+            track_time: 1.0,
+            total_time: 3.1,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "dispose".into(),
+            track_time: 1.0,
+            total_time: 3.1,
+        },
+    ];
+
+    assert_eq!(*recording.rows.borrow(), expected);
+}
+
+#[test]
+fn interrupt_with_delay() {
+    let (mut state, mut skeleton, recording) = setup();
+    state.set_listener(RecordingListener {
+        recording: recording.clone(),
+    });
+
+    state.set_animation(0, "events0", false).unwrap();
+    let entry = state.add_animation(0, "events1", false, 0.5).unwrap();
+    entry.set_track_end(&mut state, 1.0);
+
+    run(&mut state, &mut skeleton, &recording, 0.1, 2.0);
+
+    let expected = vec![
+        ResultRow {
+            animation_index: 0,
+            name: "start".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 0".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 14".into(),
+            track_time: 0.5,
+            total_time: 0.5,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "interrupt".into(),
+            track_time: 0.6,
+            total_time: 0.6,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "start".into(),
+            track_time: 0.1,
+            total_time: 0.6,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "event 0".into(),
+            track_time: 0.1,
+            total_time: 0.6,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "end".into(),
+            track_time: 0.6,
+            total_time: 0.7,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "dispose".into(),
+            track_time: 0.6,
+            total_time: 0.7,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "event 14".into(),
+            track_time: 0.5,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "event 30".into(),
+            track_time: 1.0,
+            total_time: 1.5,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "complete".into(),
+            track_time: 1.0,
+            total_time: 1.5,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "end".into(),
+            track_time: 1.0,
+            total_time: 1.6,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "dispose".into(),
+            track_time: 1.0,
+            total_time: 1.6,
+        },
+    ];
+
+    assert_eq!(*recording.rows.borrow(), expected);
+}
+
+#[test]
+fn interrupt_with_delay_and_mix_time() {
+    let (mut state, mut skeleton, recording) = setup();
+    state.set_listener(RecordingListener {
+        recording: recording.clone(),
+    });
+
+    state.data_mut().set_mix("events0", "events1", 0.7).unwrap();
+
+    state.set_animation(0, "events0", true).unwrap();
+    let entry = state.add_animation(0, "events1", false, 0.9).unwrap();
+    entry.set_track_end(&mut state, 1.0);
+
+    run(&mut state, &mut skeleton, &recording, 0.1, 2.0);
+
+    let expected = vec![
+        ResultRow {
+            animation_index: 0,
+            name: "start".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 0".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 14".into(),
+            track_time: 0.5,
+            total_time: 0.5,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "interrupt".into(),
+            track_time: 1.0,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "start".into(),
+            track_time: 0.1,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "complete".into(),
+            track_time: 1.0,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "event 0".into(),
+            track_time: 0.1,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "event 14".into(),
+            track_time: 0.5,
+            total_time: 1.4,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "end".into(),
+            track_time: 1.6,
+            total_time: 1.7,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "dispose".into(),
+            track_time: 1.6,
+            total_time: 1.7,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "event 30".into(),
+            track_time: 1.0,
+            total_time: 1.9,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "complete".into(),
+            track_time: 1.0,
+            total_time: 1.9,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "end".into(),
+            track_time: 1.0,
+            total_time: 2.0,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "dispose".into(),
+            track_time: 1.0,
+            total_time: 2.0,
+        },
+    ];
+
+    assert_eq!(*recording.rows.borrow(), expected);
+}
+
+#[test]
+fn animation0_events_do_not_fire_during_mix() {
+    let (mut state, mut skeleton, recording) = setup();
+    state.set_listener(RecordingListener {
+        recording: recording.clone(),
+    });
+
+    state.data_mut().default_mix = 0.7;
+
+    state.set_animation(0, "events0", false).unwrap();
+    let entry = state.add_animation(0, "events1", false, 0.4).unwrap();
+    entry.set_track_end(&mut state, 1.0);
+
+    run(&mut state, &mut skeleton, &recording, 0.1, 1.5);
+
+    let expected = vec![
+        ResultRow {
+            animation_index: 0,
+            name: "start".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 0".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "interrupt".into(),
+            track_time: 0.5,
+            total_time: 0.5,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "start".into(),
+            track_time: 0.1,
+            total_time: 0.5,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "event 0".into(),
+            track_time: 0.1,
+            total_time: 0.5,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "event 14".into(),
+            track_time: 0.5,
+            total_time: 0.9,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "complete".into(),
+            track_time: 1.0,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "end".into(),
+            track_time: 1.1,
+            total_time: 1.2,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "dispose".into(),
+            track_time: 1.1,
+            total_time: 1.2,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "event 30".into(),
+            track_time: 1.0,
+            total_time: 1.4,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "complete".into(),
+            track_time: 1.0,
+            total_time: 1.4,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "end".into(),
+            track_time: 1.0,
+            total_time: 1.5,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "dispose".into(),
+            track_time: 1.0,
+            total_time: 1.5,
+        },
+    ];
+
+    assert_eq!(*recording.rows.borrow(), expected);
+}
+
+#[test]
+fn event_threshold_some_animation0_events_fire_during_mix() {
+    let (mut state, mut skeleton, recording) = setup();
+    state.set_listener(RecordingListener {
+        recording: recording.clone(),
+    });
+
+    state.data_mut().set_mix("events0", "events1", 0.7).unwrap();
+
+    let entry = state.set_animation(0, "events0", false).unwrap();
+    entry.set_event_threshold(&mut state, 0.5);
+    let entry = state.add_animation(0, "events1", false, 0.4).unwrap();
+    entry.set_track_end(&mut state, 1.0);
+
+    run(&mut state, &mut skeleton, &recording, 0.1, 2.0);
+
+    let expected = vec![
+        ResultRow {
+            animation_index: 0,
+            name: "start".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 0".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "interrupt".into(),
+            track_time: 0.5,
+            total_time: 0.5,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "start".into(),
+            track_time: 0.1,
+            total_time: 0.5,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 14".into(),
+            track_time: 0.5,
+            total_time: 0.5,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "event 0".into(),
+            track_time: 0.1,
+            total_time: 0.5,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "event 14".into(),
+            track_time: 0.5,
+            total_time: 0.9,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "complete".into(),
+            track_time: 1.0,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "end".into(),
+            track_time: 1.1,
+            total_time: 1.2,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "dispose".into(),
+            track_time: 1.1,
+            total_time: 1.2,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "event 30".into(),
+            track_time: 1.0,
+            total_time: 1.4,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "complete".into(),
+            track_time: 1.0,
+            total_time: 1.4,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "end".into(),
+            track_time: 1.0,
+            total_time: 1.5,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "dispose".into(),
+            track_time: 1.0,
+            total_time: 1.5,
+        },
+    ];
+
+    assert_eq!(*recording.rows.borrow(), expected);
+}
+
+#[test]
+fn event_threshold_all_animation0_events_fire_during_mix() {
+    let (mut state, mut skeleton, recording) = setup();
+    state.set_listener(RecordingListener {
+        recording: recording.clone(),
+    });
+
+    let entry = state.set_animation(0, "events0", true).unwrap();
+    entry.set_event_threshold(&mut state, 1.0);
+    let entry = state.add_animation(0, "events1", false, 0.8).unwrap();
+    entry.set_mix_duration(&mut state, 0.7);
+    entry.set_track_end(&mut state, 1.0);
+
+    run(&mut state, &mut skeleton, &recording, 0.1, 2.0);
+
+    let expected = vec![
+        ResultRow {
+            animation_index: 0,
+            name: "start".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 0".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 14".into(),
+            track_time: 0.5,
+            total_time: 0.5,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "interrupt".into(),
+            track_time: 0.9,
+            total_time: 0.9,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "start".into(),
+            track_time: 0.1,
+            total_time: 0.9,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "event 0".into(),
+            track_time: 0.1,
+            total_time: 0.9,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 30".into(),
+            track_time: 1.0,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "complete".into(),
+            track_time: 1.0,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 0".into(),
+            track_time: 1.0,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "event 14".into(),
+            track_time: 0.5,
+            total_time: 1.3,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "end".into(),
+            track_time: 1.5,
+            total_time: 1.6,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "dispose".into(),
+            track_time: 1.5,
+            total_time: 1.6,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "event 30".into(),
+            track_time: 1.0,
+            total_time: 1.8,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "complete".into(),
+            track_time: 1.0,
+            total_time: 1.8,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "end".into(),
+            track_time: 1.0,
+            total_time: 1.9,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "dispose".into(),
+            track_time: 1.0,
+            total_time: 1.9,
+        },
+    ];
+
+    assert_eq!(*recording.rows.borrow(), expected);
+}
+
+#[test]
+fn looping() {
+    let (mut state, mut skeleton, recording) = setup();
+    state.set_listener(RecordingListener {
+        recording: recording.clone(),
+    });
+
+    state.set_animation(0, "events0", true).unwrap();
+
+    run(&mut state, &mut skeleton, &recording, 0.1, 4.01);
+    state.clear_tracks();
+    state.apply(&mut skeleton);
+
+    let expected = vec![
+        ResultRow {
+            animation_index: 0,
+            name: "start".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 0".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 14".into(),
+            track_time: 0.5,
+            total_time: 0.5,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 30".into(),
+            track_time: 1.0,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "complete".into(),
+            track_time: 1.0,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 0".into(),
+            track_time: 1.0,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 14".into(),
+            track_time: 1.5,
+            total_time: 1.5,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 30".into(),
+            track_time: 2.0,
+            total_time: 2.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "complete".into(),
+            track_time: 2.0,
+            total_time: 2.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 0".into(),
+            track_time: 2.0,
+            total_time: 2.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 14".into(),
+            track_time: 2.5,
+            total_time: 2.5,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 30".into(),
+            track_time: 3.0,
+            total_time: 3.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "complete".into(),
+            track_time: 3.0,
+            total_time: 3.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 0".into(),
+            track_time: 3.0,
+            total_time: 3.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 14".into(),
+            track_time: 3.5,
+            total_time: 3.5,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 30".into(),
+            track_time: 4.0,
+            total_time: 4.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "complete".into(),
+            track_time: 4.0,
+            total_time: 4.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 0".into(),
+            track_time: 4.0,
+            total_time: 4.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "end".into(),
+            track_time: 4.1,
+            total_time: 4.1,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "dispose".into(),
+            track_time: 4.1,
+            total_time: 4.1,
+        },
+    ];
+
+    assert_eq!(*recording.rows.borrow(), expected);
+}
+
+#[test]
+fn not_looping_track_end_past_animation_duration() {
+    let (mut state, mut skeleton, recording) = setup();
+    state.set_listener(RecordingListener {
+        recording: recording.clone(),
+    });
+
+    state.set_animation(0, "events0", false).unwrap();
+    let entry = state.add_animation(0, "events1", false, 2.0).unwrap();
+    entry.set_track_end(&mut state, 1.0);
+
+    run(&mut state, &mut skeleton, &recording, 0.1, 4.0);
+
+    let expected = vec![
+        ResultRow {
+            animation_index: 0,
+            name: "start".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 0".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 14".into(),
+            track_time: 0.5,
+            total_time: 0.5,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 30".into(),
+            track_time: 1.0,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "complete".into(),
+            track_time: 1.0,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "interrupt".into(),
+            track_time: 2.1,
+            total_time: 2.1,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "start".into(),
+            track_time: 0.1,
+            total_time: 2.1,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "event 0".into(),
+            track_time: 0.1,
+            total_time: 2.1,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "end".into(),
+            track_time: 2.1,
+            total_time: 2.2,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "dispose".into(),
+            track_time: 2.1,
+            total_time: 2.2,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "event 14".into(),
+            track_time: 0.5,
+            total_time: 2.5,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "event 30".into(),
+            track_time: 1.0,
+            total_time: 3.0,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "complete".into(),
+            track_time: 1.0,
+            total_time: 3.0,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "end".into(),
+            track_time: 1.0,
+            total_time: 3.1,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "dispose".into(),
+            track_time: 1.0,
+            total_time: 3.1,
+        },
+    ];
+
+    assert_eq!(*recording.rows.borrow(), expected);
+}
+
+#[test]
+fn interrupt_animation_after_first_loop_complete() {
+    let (mut state, mut skeleton, recording) = setup();
+    state.set_listener(RecordingListener {
+        recording: recording.clone(),
+    });
+
+    state.set_animation(0, "events0", true).unwrap();
+
+    run_with_frame(
+        &mut state,
+        &mut skeleton,
+        &recording,
+        0.1,
+        6.0,
+        |time, state| {
+            if (time - 1.4).abs() < 0.000001 {
+                let entry = state.add_animation(0, "events1", false, 0.0).unwrap();
+                entry.set_track_end(state, 1.0);
+            }
+        },
+    );
+
+    let expected = vec![
+        ResultRow {
+            animation_index: 0,
+            name: "start".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 0".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 14".into(),
+            track_time: 0.5,
+            total_time: 0.5,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 30".into(),
+            track_time: 1.0,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "complete".into(),
+            track_time: 1.0,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 0".into(),
+            track_time: 1.0,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 14".into(),
+            track_time: 1.5,
+            total_time: 1.5,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 30".into(),
+            track_time: 2.0,
+            total_time: 2.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "complete".into(),
+            track_time: 2.0,
+            total_time: 2.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 0".into(),
+            track_time: 2.0,
+            total_time: 2.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "interrupt".into(),
+            track_time: 2.1,
+            total_time: 2.1,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "start".into(),
+            track_time: 0.1,
+            total_time: 2.1,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "event 0".into(),
+            track_time: 0.1,
+            total_time: 2.1,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "end".into(),
+            track_time: 2.1,
+            total_time: 2.2,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "dispose".into(),
+            track_time: 2.1,
+            total_time: 2.2,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "event 14".into(),
+            track_time: 0.5,
+            total_time: 2.5,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "event 30".into(),
+            track_time: 1.0,
+            total_time: 3.0,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "complete".into(),
+            track_time: 1.0,
+            total_time: 3.0,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "end".into(),
+            track_time: 1.0,
+            total_time: 3.1,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "dispose".into(),
+            track_time: 1.0,
+            total_time: 3.1,
+        },
+    ];
+
+    assert_eq!(*recording.rows.borrow(), expected);
+}
+
+#[test]
+fn add_animation_on_empty_track() {
+    let (mut state, mut skeleton, recording) = setup();
+    state.set_listener(RecordingListener {
+        recording: recording.clone(),
+    });
+
+    let entry = state.add_animation(0, "events0", false, 0.0).unwrap();
+    entry.set_track_end(&mut state, 1.0);
+
+    run(&mut state, &mut skeleton, &recording, 0.1, 1.9);
+
+    let expected = vec![
+        ResultRow {
+            animation_index: 0,
+            name: "start".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 0".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 14".into(),
+            track_time: 0.5,
+            total_time: 0.5,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 30".into(),
+            track_time: 1.0,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "complete".into(),
+            track_time: 1.0,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "end".into(),
+            track_time: 1.0,
+            total_time: 1.1,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "dispose".into(),
+            track_time: 1.0,
+            total_time: 1.1,
+        },
+    ];
+
+    assert_eq!(*recording.rows.borrow(), expected);
+}
+
+#[test]
+fn end_time_beyond_non_looping_animation_duration() {
+    let (mut state, mut skeleton, recording) = setup();
+    state.set_listener(RecordingListener {
+        recording: recording.clone(),
+    });
+
+    let entry = state.set_animation(0, "events0", false).unwrap();
+    entry.set_track_end(&mut state, 9.0);
+
+    run(&mut state, &mut skeleton, &recording, 0.1, 10.0);
+
+    let expected = vec![
+        ResultRow {
+            animation_index: 0,
+            name: "start".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 0".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 14".into(),
+            track_time: 0.5,
+            total_time: 0.5,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 30".into(),
+            track_time: 1.0,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "complete".into(),
+            track_time: 1.0,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "end".into(),
+            track_time: 9.0,
+            total_time: 9.1,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "dispose".into(),
+            track_time: 9.0,
+            total_time: 9.1,
+        },
+    ];
+
+    assert_eq!(*recording.rows.borrow(), expected);
+}
+
+#[test]
+fn looping_with_animation_start() {
+    let (mut state, mut skeleton, recording) = setup();
+    state.set_listener(RecordingListener {
+        recording: recording.clone(),
+    });
+
+    let entry = state.set_animation(0, "events0", true).unwrap();
+    entry.set_animation_last(&mut state, 0.6);
+    entry.set_animation_start(&mut state, 0.6);
+
+    run(&mut state, &mut skeleton, &recording, 0.1, 1.4);
+    state.clear_tracks();
+    state.apply(&mut skeleton);
+
+    let expected = vec![
+        ResultRow {
+            animation_index: 0,
+            name: "start".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 30".into(),
+            track_time: 0.4,
+            total_time: 0.4,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "complete".into(),
+            track_time: 0.4,
+            total_time: 0.4,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 30".into(),
+            track_time: 0.8,
+            total_time: 0.8,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "complete".into(),
+            track_time: 0.8,
+            total_time: 0.8,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 30".into(),
+            track_time: 1.2,
+            total_time: 1.2,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "complete".into(),
+            track_time: 1.2,
+            total_time: 1.2,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "end".into(),
+            track_time: 1.4,
+            total_time: 1.4,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "dispose".into(),
+            track_time: 1.4,
+            total_time: 1.4,
+        },
+    ];
+
+    assert_eq!(*recording.rows.borrow(), expected);
+}
+
+#[test]
+fn looping_with_animation_start_and_end() {
+    let (mut state, mut skeleton, recording) = setup();
+    state.set_listener(RecordingListener {
+        recording: recording.clone(),
+    });
+
+    let entry = state.set_animation(0, "events0", true).unwrap();
+    entry.set_animation_start(&mut state, 0.2);
+    entry.set_animation_last(&mut state, 0.2);
+    entry.set_animation_end(&mut state, 0.8);
+
+    run(&mut state, &mut skeleton, &recording, 0.1, 1.8);
+    state.clear_tracks();
+    state.apply(&mut skeleton);
+
+    let expected = vec![
+        ResultRow {
+            animation_index: 0,
+            name: "start".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 14".into(),
+            track_time: 0.3,
+            total_time: 0.3,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "complete".into(),
+            track_time: 0.6,
+            total_time: 0.6,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 14".into(),
+            track_time: 0.9,
+            total_time: 0.9,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "complete".into(),
+            track_time: 1.2,
+            total_time: 1.2,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 14".into(),
+            track_time: 1.5,
+            total_time: 1.5,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "end".into(),
+            track_time: 1.8,
+            total_time: 1.8,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "dispose".into(),
+            track_time: 1.8,
+            total_time: 1.8,
+        },
+    ];
+
+    assert_eq!(*recording.rows.borrow(), expected);
+}
+
+#[test]
+fn non_looping_with_animation_start_and_end() {
+    let (mut state, mut skeleton, recording) = setup();
+    state.set_listener(RecordingListener {
+        recording: recording.clone(),
+    });
+
+    let entry = state.set_animation(0, "events0", false).unwrap();
+    entry.set_animation_start(&mut state, 0.2);
+    entry.set_animation_last(&mut state, 0.2);
+    entry.set_animation_end(&mut state, 0.8);
+    entry.set_track_end(&mut state, 1.0);
+
+    run(&mut state, &mut skeleton, &recording, 0.1, 1.8);
+
+    let expected = vec![
+        ResultRow {
+            animation_index: 0,
+            name: "start".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 14".into(),
+            track_time: 0.3,
+            total_time: 0.3,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "complete".into(),
+            track_time: 0.6,
+            total_time: 0.6,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "end".into(),
+            track_time: 1.0,
+            total_time: 1.1,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "dispose".into(),
+            track_time: 1.0,
+            total_time: 1.1,
+        },
+    ];
+
+    assert_eq!(*recording.rows.borrow(), expected);
+}
+
+#[test]
+fn mix_out_looping_with_animation_start_and_end() {
+    let (mut state, mut skeleton, recording) = setup();
+    state.set_listener(RecordingListener {
+        recording: recording.clone(),
+    });
+
+    let entry = state.set_animation(0, "events0", true).unwrap();
+    entry.set_animation_start(&mut state, 0.2);
+    entry.set_animation_last(&mut state, 0.2);
+    entry.set_animation_end(&mut state, 0.8);
+    entry.set_event_threshold(&mut state, 1.0);
+
+    let entry = state.add_animation(0, "events1", false, 0.7).unwrap();
+    entry.set_mix_duration(&mut state, 0.7);
+    entry.set_track_end(&mut state, 1.0);
+
+    run(&mut state, &mut skeleton, &recording, 0.1, 2.0);
+
+    let expected = vec![
+        ResultRow {
+            animation_index: 0,
+            name: "start".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 14".into(),
+            track_time: 0.3,
+            total_time: 0.3,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "complete".into(),
+            track_time: 0.6,
+            total_time: 0.6,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "interrupt".into(),
+            track_time: 0.8,
+            total_time: 0.8,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "start".into(),
+            track_time: 0.1,
+            total_time: 0.8,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "event 0".into(),
+            track_time: 0.1,
+            total_time: 0.8,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 14".into(),
+            track_time: 0.9,
+            total_time: 0.9,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "complete".into(),
+            track_time: 1.2,
+            total_time: 1.2,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "event 14".into(),
+            track_time: 0.5,
+            total_time: 1.2,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "end".into(),
+            track_time: 1.4,
+            total_time: 1.5,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "dispose".into(),
+            track_time: 1.4,
+            total_time: 1.5,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "event 30".into(),
+            track_time: 1.0,
+            total_time: 1.7,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "complete".into(),
+            track_time: 1.0,
+            total_time: 1.7,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "end".into(),
+            track_time: 1.0,
+            total_time: 1.8,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "dispose".into(),
+            track_time: 1.0,
+            total_time: 1.8,
+        },
+    ];
+
+    assert_eq!(*recording.rows.borrow(), expected);
+}
+
+#[test]
+fn set_animation_with_track_entry_mix() {
+    let (mut state, mut skeleton, recording) = setup();
+    state.set_listener(RecordingListener {
+        recording: recording.clone(),
+    });
+
+    state.set_animation(0, "events0", true).unwrap();
+
+    run_with_frame(
+        &mut state,
+        &mut skeleton,
+        &recording,
+        0.1,
+        2.1,
+        |time, state| {
+            if (time - 1.0).abs() < 0.000001 {
+                let entry = state.set_animation(0, "events1", false).unwrap();
+                entry.set_mix_duration(state, 0.7);
+                entry.set_track_end(state, 1.0);
+            }
+        },
+    );
+
+    let expected = vec![
+        ResultRow {
+            animation_index: 0,
+            name: "start".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 0".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 14".into(),
+            track_time: 0.5,
+            total_time: 0.5,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 30".into(),
+            track_time: 1.0,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "complete".into(),
+            track_time: 1.0,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 0".into(),
+            track_time: 1.0,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "interrupt".into(),
+            track_time: 1.0,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "start".into(),
+            track_time: 0.0,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "event 0".into(),
+            track_time: 0.1,
+            total_time: 1.1,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "event 14".into(),
+            track_time: 0.5,
+            total_time: 1.5,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "end".into(),
+            track_time: 1.7,
+            total_time: 1.8,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "dispose".into(),
+            track_time: 1.7,
+            total_time: 1.8,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "event 30".into(),
+            track_time: 1.0,
+            total_time: 2.0,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "complete".into(),
+            track_time: 1.0,
+            total_time: 2.0,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "end".into(),
+            track_time: 1.0,
+            total_time: 2.1,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "dispose".into(),
+            track_time: 1.0,
+            total_time: 2.1,
+        },
+    ];
+
+    assert_eq!(*recording.rows.borrow(), expected);
+}
+
+#[test]
+fn set_animation_twice() {
+    let (mut state, mut skeleton, recording) = setup();
+    state.set_listener(RecordingListener {
+        recording: recording.clone(),
+    });
+
+    state.set_animation(0, "events0", false).unwrap(); // First should be ignored.
+    state.set_animation(0, "events1", false).unwrap();
+
+    run_with_frame(
+        &mut state,
+        &mut skeleton,
+        &recording,
+        0.1,
+        1.9,
+        |time, state| {
+            if (time - 0.8).abs() < 0.000001 {
+                state.set_animation(0, "events0", false).unwrap(); // First should be ignored.
+                let entry = state.set_animation(0, "events2", false).unwrap();
+                entry.set_track_end(state, 1.0);
+            }
+        },
+    );
+
+    let expected = vec![
+        ResultRow {
+            animation_index: 0,
+            name: "start".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "interrupt".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "end".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "dispose".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "start".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "event 0".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "event 14".into(),
+            track_time: 0.5,
+            total_time: 0.5,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "interrupt".into(),
+            track_time: 0.8,
+            total_time: 0.8,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "start".into(),
+            track_time: 0.0,
+            total_time: 0.8,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "interrupt".into(),
+            track_time: 0.0,
+            total_time: 0.8,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "end".into(),
+            track_time: 0.0,
+            total_time: 0.8,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "dispose".into(),
+            track_time: 0.0,
+            total_time: 0.8,
+        },
+        ResultRow {
+            animation_index: 2,
+            name: "start".into(),
+            track_time: 0.0,
+            total_time: 0.8,
+        },
+        ResultRow {
+            animation_index: 2,
+            name: "event 0".into(),
+            track_time: 0.1,
+            total_time: 0.9,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "end".into(),
+            track_time: 0.9,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "dispose".into(),
+            track_time: 0.9,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 2,
+            name: "event 14".into(),
+            track_time: 0.5,
+            total_time: 1.3,
+        },
+        ResultRow {
+            animation_index: 2,
+            name: "event 30".into(),
+            track_time: 1.0,
+            total_time: 1.8,
+        },
+        ResultRow {
+            animation_index: 2,
+            name: "complete".into(),
+            track_time: 1.0,
+            total_time: 1.8,
+        },
+        ResultRow {
+            animation_index: 2,
+            name: "end".into(),
+            track_time: 1.0,
+            total_time: 1.9,
+        },
+        ResultRow {
+            animation_index: 2,
+            name: "dispose".into(),
+            track_time: 1.0,
+            total_time: 1.9,
+        },
+    ];
+
+    assert_eq!(*recording.rows.borrow(), expected);
+}
+
+#[test]
+fn set_animation_twice_with_multiple_mixing() {
+    let (mut state, mut skeleton, recording) = setup();
+    state.set_listener(RecordingListener {
+        recording: recording.clone(),
+    });
+
+    state.data_mut().default_mix = 0.6;
+
+    state.set_animation(0, "events0", false).unwrap(); // First should be ignored.
+    state.set_animation(0, "events1", false).unwrap();
+
+    run_with_frame(
+        &mut state,
+        &mut skeleton,
+        &recording,
+        0.1,
+        1.5,
+        |time, state| {
+            if (time - 0.2).abs() < 0.000001 {
+                state.set_animation(0, "events0", false).unwrap(); // First should be ignored.
+                state.set_animation(0, "events2", false).unwrap();
+            }
+            if (time - 0.4).abs() < 0.000001 {
+                state.set_animation(0, "events1", false).unwrap(); // First should be ignored.
+                let entry = state.set_animation(0, "events0", false).unwrap();
+                entry.set_track_end(state, 1.0);
+            }
+        },
+    );
+
+    let expected = vec![
+        ResultRow {
+            animation_index: 0,
+            name: "start".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "interrupt".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "end".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "dispose".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "start".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "event 0".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "interrupt".into(),
+            track_time: 0.2,
+            total_time: 0.2,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "start".into(),
+            track_time: 0.0,
+            total_time: 0.2,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "interrupt".into(),
+            track_time: 0.0,
+            total_time: 0.2,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "end".into(),
+            track_time: 0.0,
+            total_time: 0.2,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "dispose".into(),
+            track_time: 0.0,
+            total_time: 0.2,
+        },
+        ResultRow {
+            animation_index: 2,
+            name: "start".into(),
+            track_time: 0.0,
+            total_time: 0.2,
+        },
+        ResultRow {
+            animation_index: 2,
+            name: "event 0".into(),
+            track_time: 0.1,
+            total_time: 0.3,
+        },
+        ResultRow {
+            animation_index: 2,
+            name: "interrupt".into(),
+            track_time: 0.2,
+            total_time: 0.4,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "start".into(),
+            track_time: 0.0,
+            total_time: 0.4,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "interrupt".into(),
+            track_time: 0.0,
+            total_time: 0.4,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "end".into(),
+            track_time: 0.0,
+            total_time: 0.4,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "dispose".into(),
+            track_time: 0.0,
+            total_time: 0.4,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "start".into(),
+            track_time: 0.0,
+            total_time: 0.4,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 0".into(),
+            track_time: 0.1,
+            total_time: 0.5,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "end".into(),
+            track_time: 0.8,
+            total_time: 0.9,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "dispose".into(),
+            track_time: 0.8,
+            total_time: 0.9,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 14".into(),
+            track_time: 0.5,
+            total_time: 0.9,
+        },
+        ResultRow {
+            animation_index: 2,
+            name: "end".into(),
+            track_time: 0.8,
+            total_time: 1.1,
+        },
+        ResultRow {
+            animation_index: 2,
+            name: "dispose".into(),
+            track_time: 0.8,
+            total_time: 1.1,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 30".into(),
+            track_time: 1.0,
+            total_time: 1.4,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "complete".into(),
+            track_time: 1.0,
+            total_time: 1.4,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "end".into(),
+            track_time: 1.0,
+            total_time: 1.5,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "dispose".into(),
+            track_time: 1.0,
+            total_time: 1.5,
+        },
+    ];
+
+    assert_eq!(*recording.rows.borrow(), expected);
+}
+
+#[test]
+fn add_animation_with_delay_on_empty_track() {
+    let (mut state, mut skeleton, recording) = setup();
+    state.set_listener(RecordingListener {
+        recording: recording.clone(),
+    });
+
+    let entry = state.add_animation(0, "events0", false, 5.0).unwrap();
+    entry.set_track_end(&mut state, 1.0);
+
+    run(&mut state, &mut skeleton, &recording, 0.1, 10.0);
+
+    let expected = vec![
+        ResultRow {
+            animation_index: 0,
+            name: "start".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 0".into(),
+            track_time: 0.0,
+            total_time: 5.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 14".into(),
+            track_time: 0.5,
+            total_time: 5.5,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 30".into(),
+            track_time: 1.0,
+            total_time: 6.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "complete".into(),
+            track_time: 1.0,
+            total_time: 6.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "end".into(),
+            track_time: 1.0,
+            total_time: 6.1,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "dispose".into(),
+            track_time: 1.0,
+            total_time: 6.1,
+        },
+    ];
+
+    assert_eq!(*recording.rows.borrow(), expected);
+}
+
+#[test]
+fn set_animation_during_animation_state_listener() {
+    #[derive(Default)]
+    struct Reentrant;
+
+    impl AnimationStateListener for Reentrant {
+        fn on_event(
+            &mut self,
+            state: &mut AnimationState,
+            entry: &TrackEntrySnapshot,
+            event: &AnimationStateEvent,
+        ) {
+            match event {
+                AnimationStateEvent::Start => {
+                    if entry.animation_name == "events0" {
+                        state.set_animation(1, "events1", false).unwrap();
+                    }
+                }
+                AnimationStateEvent::Interrupt => {
+                    state.add_animation(3, "events1", false, 0.0).unwrap();
+                }
+                AnimationStateEvent::End => {
+                    if entry.animation_name == "events0" {
+                        state.set_animation(0, "events1", false).unwrap();
+                    }
+                }
+                AnimationStateEvent::Dispose => {
+                    if entry.animation_name == "events0" {
+                        state.set_animation(1, "events1", false).unwrap();
+                    }
+                }
+                AnimationStateEvent::Complete => {
+                    if entry.animation_name == "events0" {
+                        state.set_animation(1, "events1", false).unwrap();
+                    }
+                }
+                AnimationStateEvent::Event(_) => {
+                    if entry.track_index != 2 {
+                        state.set_animation(2, "events1", false).unwrap();
+                    }
+                }
+            }
+        }
+    }
+
+    let (mut state, mut skeleton, recording) = setup();
+    state.set_listener(Reentrant::default());
+
+    state.add_animation(0, "events0", false, 0.0).unwrap();
+    state.add_animation(0, "events1", false, 0.0).unwrap();
+    let entry = state.set_animation(1, "events1", false).unwrap();
+    entry.set_track_end(&mut state, 1.0);
+
+    run(&mut state, &mut skeleton, &recording, 0.1, 2.0);
+}
+
+#[test]
+fn clear_track() {
+    let (mut state, mut skeleton, recording) = setup();
+    state.set_listener(RecordingListener {
+        recording: recording.clone(),
+    });
+
+    let entry = state.add_animation(0, "events0", false, 0.0).unwrap();
+    entry.set_track_end(&mut state, 1.0);
+
+    run_with_frame(
+        &mut state,
+        &mut skeleton,
+        &recording,
+        0.1,
+        2.0,
+        |time, state| {
+            if time == 0.7 {
+                state.clear_track(0);
+            }
+        },
+    );
+
+    let expected = vec![
+        ResultRow {
+            animation_index: 0,
+            name: "start".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 0".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 14".into(),
+            track_time: 0.5,
+            total_time: 0.5,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "end".into(),
+            track_time: 0.7,
+            total_time: 0.7,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "dispose".into(),
+            track_time: 0.7,
+            total_time: 0.7,
+        },
+    ];
+
+    assert_eq!(*recording.rows.borrow(), expected);
+}
+
+#[test]
+fn set_empty_animation() {
+    let (mut state, mut skeleton, recording) = setup();
+    state.set_listener(RecordingListener {
+        recording: recording.clone(),
+    });
+
+    let entry = state.add_animation(0, "events0", false, 0.0).unwrap();
+    entry.set_track_end(&mut state, 1.0);
+
+    run_with_frame(
+        &mut state,
+        &mut skeleton,
+        &recording,
+        0.1,
+        2.0,
+        |time, state| {
+            if time == 0.7 {
+                state.set_empty_animation(0, 0.0).unwrap();
+            }
+        },
+    );
+
+    let expected = vec![
+        ResultRow {
+            animation_index: 0,
+            name: "start".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 0".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 14".into(),
+            track_time: 0.5,
+            total_time: 0.5,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "interrupt".into(),
+            track_time: 0.7,
+            total_time: 0.7,
+        },
+        ResultRow {
+            animation_index: -1,
+            name: "start".into(),
+            track_time: 0.0,
+            total_time: 0.7,
+        },
+        ResultRow {
+            animation_index: -1,
+            name: "complete".into(),
+            track_time: 0.1,
+            total_time: 0.8,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "end".into(),
+            track_time: 0.8,
+            total_time: 0.9,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "dispose".into(),
+            track_time: 0.8,
+            total_time: 0.9,
+        },
+        ResultRow {
+            animation_index: -1,
+            name: "end".into(),
+            track_time: 0.2,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: -1,
+            name: "dispose".into(),
+            track_time: 0.2,
+            total_time: 1.0,
+        },
+    ];
+
+    assert_eq!(*recording.rows.borrow(), expected);
+}
+
+#[test]
+fn track_entry_listener() {
+    #[derive(Clone)]
+    struct Bits {
+        counter: Rc<Cell<i32>>,
+    }
+
+    impl TrackEntryListener for Bits {
+        fn on_event(
+            &mut self,
+            _state: &mut AnimationState,
+            _entry: &TrackEntrySnapshot,
+            event: &AnimationStateEvent,
+        ) {
+            let add = match event {
+                AnimationStateEvent::Start => 1 << 1,
+                AnimationStateEvent::Interrupt => 1 << 5,
+                AnimationStateEvent::End => 1 << 9,
+                AnimationStateEvent::Dispose => 1 << 13,
+                AnimationStateEvent::Complete => 1 << 17,
+                AnimationStateEvent::Event(_) => 1 << 21,
+            };
+            self.counter.set(self.counter.get() + add);
+        }
+    }
+
+    let (mut state, mut skeleton, recording) = setup();
+    let counter = Rc::new(Cell::new(0));
+
+    let entry = state.add_animation(0, "events0", false, 0.0).unwrap();
+    entry.set_listener(
+        &mut state,
+        Bits {
+            counter: counter.clone(),
+        },
+    );
+
+    state.add_animation(0, "events0", false, 0.0).unwrap();
+    state.add_animation(0, "events1", false, 0.0).unwrap();
+    let entry = state.set_animation(1, "events1", false).unwrap();
+    entry.set_track_end(&mut state, 1.0);
+
+    run(&mut state, &mut skeleton, &recording, 0.1, 10.0);
+
+    assert_eq!(counter.get(), 15082016);
+}
+
+#[test]
+fn looping_with_track_end_2p6() {
+    let (mut state, mut skeleton, recording) = setup();
+    state.set_listener(RecordingListener {
+        recording: recording.clone(),
+    });
+
+    let entry = state.set_animation(0, "events0", true).unwrap();
+    entry.set_track_end(&mut state, 2.6);
+
+    run(&mut state, &mut skeleton, &recording, 0.1, 3.0);
+
+    let expected = vec![
+        ResultRow {
+            animation_index: 0,
+            name: "start".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 0".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 14".into(),
+            track_time: 0.5,
+            total_time: 0.5,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 30".into(),
+            track_time: 1.0,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "complete".into(),
+            track_time: 1.0,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 0".into(),
+            track_time: 1.0,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 14".into(),
+            track_time: 1.5,
+            total_time: 1.5,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 30".into(),
+            track_time: 2.0,
+            total_time: 2.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "complete".into(),
+            track_time: 2.0,
+            total_time: 2.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 0".into(),
+            track_time: 2.0,
+            total_time: 2.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 14".into(),
+            track_time: 2.5,
+            total_time: 2.5,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "end".into(),
+            track_time: 2.6,
+            total_time: 2.7,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "dispose".into(),
+            track_time: 2.6,
+            total_time: 2.7,
+        },
+    ];
+
+    assert_eq!(*recording.rows.borrow(), expected);
+}
+
+#[test]
+fn set_next() {
+    let (mut state, mut skeleton, recording) = setup();
+    state.set_listener(RecordingListener {
+        recording: recording.clone(),
+    });
+
+    state.set_animation(0, "events0", false).unwrap();
+    let entry = state.add_animation(0, "events1", false, 0.0).unwrap();
+    entry.set_track_end(&mut state, 1.0);
+
+    run(&mut state, &mut skeleton, &recording, 0.1, 3.0);
+
+    let expected = vec![
+        ResultRow {
+            animation_index: 0,
+            name: "start".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 0".into(),
+            track_time: 0.0,
+            total_time: 0.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 14".into(),
+            track_time: 0.5,
+            total_time: 0.5,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "event 30".into(),
+            track_time: 1.0,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "complete".into(),
+            track_time: 1.0,
+            total_time: 1.0,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "interrupt".into(),
+            track_time: 1.1,
+            total_time: 1.1,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "start".into(),
+            track_time: 0.1,
+            total_time: 1.1,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "event 0".into(),
+            track_time: 0.1,
+            total_time: 1.1,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "end".into(),
+            track_time: 1.1,
+            total_time: 1.2,
+        },
+        ResultRow {
+            animation_index: 0,
+            name: "dispose".into(),
+            track_time: 1.1,
+            total_time: 1.2,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "event 14".into(),
+            track_time: 0.5,
+            total_time: 1.5,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "event 30".into(),
+            track_time: 1.0,
+            total_time: 2.0,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "complete".into(),
+            track_time: 1.0,
+            total_time: 2.0,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "end".into(),
+            track_time: 1.0,
+            total_time: 2.1,
+        },
+        ResultRow {
+            animation_index: 1,
+            name: "dispose".into(),
+            track_time: 1.0,
+            total_time: 2.1,
+        },
+    ];
+
+    assert_eq!(*recording.rows.borrow(), expected);
+}

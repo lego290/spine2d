@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test (core)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+
+      # NOTE: CI intentionally does not run the upstream oracle (`upstream-smoke`).
+      # That feature requires fetching/compiling upstream `spine-runtimes` sources and assets.
+      - name: Run tests (spine2d)
+        run: cargo test -p spine2d --features json,binary
+
+      - name: Build (spine2d-wgpu)
+        run: cargo build -p spine2d-wgpu --features json
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (spine2d)
+        run: cargo clippy -p spine2d --features json,binary -- -D warnings
+
+      - name: Clippy (spine2d-wgpu)
+        run: cargo clippy -p spine2d-wgpu --features json -- -D warnings
+
+  wasm:
+    name: Build (wasm)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (wasm)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Cargo check (spine2d-web)
+        run: cargo check -p spine2d-web --target wasm32-unknown-unknown
+

@@ -1,0 +1,14 @@
+/target
+/.cache/
+/repo-ref
+
+/assets/spine-runtimes/*
+!/assets/spine-runtimes/.keep
+/third_party/spine-runtimes/examples/
+/third_party/spine-runtimes/SOURCE.txt
+/third_party/spine-runtimes/LICENSE.spine-runtimes.txt
+
+# Trunk build outputs (large, generated)
+/spine2d-web/dist/
+/spine2d-web/dist-test/
+/spine2d-web/.trunk/

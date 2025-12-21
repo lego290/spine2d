@@ -1,0 +1,808 @@
+use std::collections::HashMap;
+
+#[derive(Clone, Debug)]
+pub struct BoneData {
+    pub name: String,
+    pub parent: Option<usize>,
+    pub length: f32,
+    pub x: f32,
+    pub y: f32,
+    pub rotation: f32,
+    pub scale_x: f32,
+    pub scale_y: f32,
+    pub shear_x: f32,
+    pub shear_y: f32,
+    pub inherit: Inherit,
+    pub skin_required: bool,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Default)]
+pub enum Inherit {
+    #[default]
+    Normal,
+    OnlyTranslation,
+    NoRotationOrReflection,
+    NoScale,
+    NoScaleOrReflection,
+}
+
+#[derive(Clone, Debug)]
+pub struct SlotData {
+    pub name: String,
+    pub bone: usize,
+    pub attachment: Option<String>,
+    pub color: [f32; 4],
+    pub has_dark: bool,
+    pub dark_color: [f32; 3],
+    pub blend: BlendMode,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Default)]
+pub enum BlendMode {
+    #[default]
+    Normal,
+    Additive,
+    Multiply,
+    Screen,
+}
+
+#[derive(Clone, Debug)]
+pub struct IkConstraintData {
+    pub name: String,
+    pub order: i32,
+    pub skin_required: bool,
+    pub bones: Vec<usize>,
+    pub target: usize,
+    pub mix: f32,
+    pub softness: f32,
+    pub compress: bool,
+    pub stretch: bool,
+    pub uniform: bool,
+    pub bend_direction: i32,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub enum TransformProperty {
+    Rotate,
+    X,
+    Y,
+    ScaleX,
+    ScaleY,
+    ShearY,
+}
+
+impl TransformProperty {
+    pub(crate) fn index(self) -> usize {
+        match self {
+            Self::Rotate => 0,
+            Self::X => 1,
+            Self::Y => 2,
+            Self::ScaleX => 3,
+            Self::ScaleY => 4,
+            Self::ShearY => 5,
+        }
+    }
+
+    pub(crate) fn from_json_name(name: &str) -> Option<Self> {
+        match name {
+            "rotate" => Some(Self::Rotate),
+            "x" => Some(Self::X),
+            "y" => Some(Self::Y),
+            "scaleX" => Some(Self::ScaleX),
+            "scaleY" => Some(Self::ScaleY),
+            "shearY" => Some(Self::ShearY),
+            _ => None,
+        }
+    }
+
+    #[cfg(feature = "binary")]
+    pub(crate) fn from_binary_kind(kind: u8) -> Option<Self> {
+        match kind {
+            0 => Some(Self::Rotate),
+            1 => Some(Self::X),
+            2 => Some(Self::Y),
+            3 => Some(Self::ScaleX),
+            4 => Some(Self::ScaleY),
+            5 => Some(Self::ShearY),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct TransformToProperty {
+    pub property: TransformProperty,
+    pub offset: f32,
+    pub max: f32,
+    pub scale: f32,
+}
+
+#[derive(Clone, Debug)]
+pub struct TransformFromProperty {
+    pub property: TransformProperty,
+    pub offset: f32,
+    pub to: Vec<TransformToProperty>,
+}
+
+#[derive(Clone, Debug)]
+pub struct TransformConstraintData {
+    pub name: String,
+    pub order: i32,
+    pub skin_required: bool,
+    pub bones: Vec<usize>,
+    pub source: usize,
+    pub local_source: bool,
+    pub local_target: bool,
+    pub additive: bool,
+    pub clamp: bool,
+
+    /// [rotate, x, y, scaleX, scaleY, shearY]
+    pub offsets: [f32; 6],
+    pub properties: Vec<TransformFromProperty>,
+
+    pub mix_rotate: f32,
+    pub mix_x: f32,
+    pub mix_y: f32,
+    pub mix_scale_x: f32,
+    pub mix_scale_y: f32,
+    pub mix_shear_y: f32,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum PositionMode {
+    Fixed,
+    Percent,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum SpacingMode {
+    Length,
+    Fixed,
+    Percent,
+    Proportional,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum RotateMode {
+    Tangent,
+    Chain,
+    ChainScale,
+}
+
+#[derive(Clone, Debug)]
+pub struct PathConstraintData {
+    pub name: String,
+    pub order: i32,
+    pub bones: Vec<usize>,
+    pub target: usize,
+    pub position_mode: PositionMode,
+    pub spacing_mode: SpacingMode,
+    pub rotate_mode: RotateMode,
+    pub offset_rotation: f32,
+    pub position: f32,
+    pub spacing: f32,
+    pub mix_rotate: f32,
+    pub mix_x: f32,
+    pub mix_y: f32,
+    pub skin_required: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct PhysicsConstraintData {
+    pub name: String,
+    pub order: i32,
+    pub skin_required: bool,
+    pub bone: usize,
+
+    pub x: f32,
+    pub y: f32,
+    pub rotate: f32,
+    pub scale_x: f32,
+    pub shear_x: f32,
+    pub limit: f32,
+    pub step: f32,
+
+    pub inertia: f32,
+    pub strength: f32,
+    pub damping: f32,
+    pub mass_inverse: f32,
+    pub wind: f32,
+    pub gravity: f32,
+    pub mix: f32,
+
+    pub inertia_global: bool,
+    pub strength_global: bool,
+    pub damping_global: bool,
+    pub mass_global: bool,
+    pub wind_global: bool,
+    pub gravity_global: bool,
+    pub mix_global: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct SliderConstraintData {
+    pub name: String,
+    pub order: i32,
+    pub skin_required: bool,
+
+    pub setup_time: f32,
+    pub setup_mix: f32,
+
+    pub additive: bool,
+    pub looped: bool,
+
+    pub bone: Option<usize>,
+    pub property: Option<TransformProperty>,
+    pub property_from: f32,
+    pub to: f32,
+    pub scale: f32,
+    pub local: bool,
+
+    /// Resolved animation index in `SkeletonData::animations`.
+    pub animation: Option<usize>,
+}
+
+#[derive(Clone, Debug)]
+pub struct IkFrame {
+    pub time: f32,
+    pub mix: f32,
+    pub softness: f32,
+    pub bend_direction: i32,
+    pub compress: bool,
+    pub stretch: bool,
+    pub curve: [Curve; 2],
+}
+
+#[derive(Clone, Debug)]
+pub struct IkConstraintTimeline {
+    pub constraint_index: usize,
+    pub frames: Vec<IkFrame>,
+}
+
+#[derive(Clone, Debug)]
+pub struct TransformFrame {
+    pub time: f32,
+    pub mix_rotate: f32,
+    pub mix_x: f32,
+    pub mix_y: f32,
+    pub mix_scale_x: f32,
+    pub mix_scale_y: f32,
+    pub mix_shear_y: f32,
+    pub curve: [Curve; 6],
+}
+
+#[derive(Clone, Debug)]
+pub struct TransformConstraintTimeline {
+    pub constraint_index: usize,
+    pub frames: Vec<TransformFrame>,
+}
+
+#[derive(Clone, Debug)]
+pub struct FloatFrame {
+    pub time: f32,
+    pub value: f32,
+    pub curve: Curve,
+}
+
+#[derive(Clone, Debug)]
+pub struct PhysicsConstraintResetTimeline {
+    /// -1 means apply to all constraints (per upstream semantics).
+    pub constraint_index: i32,
+    pub frames: Vec<f32>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PhysicsConstraintFloatTimeline {
+    /// -1 means apply to all constraints (per upstream semantics).
+    pub constraint_index: i32,
+    pub frames: Vec<FloatFrame>,
+}
+
+#[derive(Clone, Debug)]
+pub enum PhysicsConstraintTimeline {
+    Inertia(PhysicsConstraintFloatTimeline),
+    Strength(PhysicsConstraintFloatTimeline),
+    Damping(PhysicsConstraintFloatTimeline),
+    Mass(PhysicsConstraintFloatTimeline),
+    Wind(PhysicsConstraintFloatTimeline),
+    Gravity(PhysicsConstraintFloatTimeline),
+    Mix(PhysicsConstraintFloatTimeline),
+}
+
+#[derive(Clone, Debug)]
+pub struct PathConstraintPositionTimeline {
+    pub constraint_index: usize,
+    pub frames: Vec<FloatFrame>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PathConstraintSpacingTimeline {
+    pub constraint_index: usize,
+    pub frames: Vec<FloatFrame>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PathMixFrame {
+    pub time: f32,
+    pub mix_rotate: f32,
+    pub mix_x: f32,
+    pub mix_y: f32,
+    pub curve: [Curve; 3],
+}
+
+#[derive(Clone, Debug)]
+pub struct PathConstraintMixTimeline {
+    pub constraint_index: usize,
+    pub frames: Vec<PathMixFrame>,
+}
+
+#[derive(Clone, Debug)]
+pub enum PathConstraintTimeline {
+    Position(PathConstraintPositionTimeline),
+    Spacing(PathConstraintSpacingTimeline),
+    Mix(PathConstraintMixTimeline),
+}
+
+#[derive(Clone, Debug)]
+pub struct SliderConstraintTimeline {
+    pub constraint_index: usize,
+    pub frames: Vec<FloatFrame>,
+}
+
+#[derive(Clone, Debug)]
+pub struct RegionAttachmentData {
+    pub name: String,
+    pub path: String,
+    pub sequence: Option<SequenceDef>,
+    pub color: [f32; 4],
+    pub x: f32,
+    pub y: f32,
+    pub rotation: f32,
+    pub scale_x: f32,
+    pub scale_y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+#[derive(Clone, Debug)]
+pub struct SequenceDef {
+    pub id: u32,
+    pub count: usize,
+    pub start: i32,
+    pub digits: usize,
+    pub setup_index: i32,
+}
+
+#[derive(Clone, Debug)]
+pub struct MeshAttachmentData {
+    pub vertex_id: u32,
+    pub name: String,
+    pub path: String,
+    /// For deform timelines, Spine runtimes match on `timelineAttachment` (linked meshes may inherit from a parent mesh).
+    /// This stores the `(skin, attachmentKey)` of the mesh used as the deform timeline target.
+    pub timeline_skin: String,
+    pub timeline_attachment: String,
+    pub sequence: Option<SequenceDef>,
+    pub color: [f32; 4],
+    pub vertices: MeshVertices,
+    pub uvs: Vec<[f32; 2]>,
+    pub triangles: Vec<u32>,
+}
+
+#[derive(Clone, Debug)]
+pub struct VertexWeight {
+    pub bone: usize,
+    pub x: f32,
+    pub y: f32,
+    pub weight: f32,
+}
+
+#[derive(Clone, Debug)]
+pub enum MeshVertices {
+    Unweighted(Vec<[f32; 2]>),
+    Weighted(Vec<Vec<VertexWeight>>),
+}
+
+#[derive(Clone, Debug)]
+pub enum AttachmentData {
+    Region(RegionAttachmentData),
+    Mesh(MeshAttachmentData),
+    Point(PointAttachmentData),
+    Path(PathAttachmentData),
+    BoundingBox(BoundingBoxAttachmentData),
+    Clipping(ClippingAttachmentData),
+}
+
+impl AttachmentData {
+    pub fn name(&self) -> &str {
+        match self {
+            AttachmentData::Region(a) => a.name.as_str(),
+            AttachmentData::Mesh(a) => a.name.as_str(),
+            AttachmentData::Point(a) => a.name.as_str(),
+            AttachmentData::Path(a) => a.name.as_str(),
+            AttachmentData::BoundingBox(a) => a.name.as_str(),
+            AttachmentData::Clipping(a) => a.name.as_str(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct PointAttachmentData {
+    pub name: String,
+    pub x: f32,
+    pub y: f32,
+    pub rotation: f32,
+}
+
+#[derive(Clone, Debug)]
+pub struct PathAttachmentData {
+    pub vertex_id: u32,
+    pub name: String,
+    pub vertices: MeshVertices,
+    pub lengths: Vec<f32>,
+    pub closed: bool,
+    pub constant_speed: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct BoundingBoxAttachmentData {
+    pub vertex_id: u32,
+    pub name: String,
+    pub vertices: MeshVertices,
+}
+
+#[derive(Clone, Debug)]
+pub struct ClippingAttachmentData {
+    pub vertex_id: u32,
+    pub name: String,
+    pub vertices: MeshVertices,
+    pub end_slot: Option<usize>,
+}
+
+#[derive(Clone, Debug)]
+pub struct SkinData {
+    pub name: String,
+    pub attachments: Vec<HashMap<String, AttachmentData>>,
+    pub bones: Vec<usize>,
+    pub ik_constraints: Vec<usize>,
+    pub transform_constraints: Vec<usize>,
+    pub path_constraints: Vec<usize>,
+    pub physics_constraints: Vec<usize>,
+    pub slider_constraints: Vec<usize>,
+}
+
+impl SkinData {
+    pub fn attachment(&self, slot_index: usize, attachment_name: &str) -> Option<&AttachmentData> {
+        self.attachments
+            .get(slot_index)
+            .and_then(|slot_map| slot_map.get(attachment_name))
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct EventData {
+    pub name: String,
+    pub int_value: i32,
+    pub float_value: f32,
+    pub string: String,
+    pub audio_path: String,
+    pub volume: f32,
+    pub balance: f32,
+}
+
+#[derive(Clone, Debug)]
+pub struct Event {
+    pub time: f32,
+    pub name: String,
+    pub int_value: i32,
+    pub float_value: f32,
+    pub string: String,
+    pub audio_path: String,
+    pub volume: f32,
+    pub balance: f32,
+}
+
+#[derive(Clone, Debug)]
+pub struct EventTimeline {
+    pub events: Vec<Event>,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum Curve {
+    Linear,
+    Stepped,
+    Bezier {
+        cx1: f32,
+        cy1: f32,
+        cx2: f32,
+        cy2: f32,
+    },
+}
+
+#[derive(Clone, Debug)]
+pub struct DeformFrame {
+    pub time: f32,
+    pub vertices: Vec<f32>,
+    pub curve: Curve,
+}
+
+#[derive(Clone, Debug)]
+pub struct DeformTimeline {
+    pub skin: String,
+    pub slot_index: usize,
+    pub attachment: String,
+    pub vertex_count: usize,
+    pub setup_vertices: Option<Vec<f32>>,
+    pub frames: Vec<DeformFrame>,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum SequenceMode {
+    Hold,
+    Once,
+    Loop,
+    PingPong,
+    OnceReverse,
+    LoopReverse,
+    PingPongReverse,
+}
+
+#[derive(Clone, Debug)]
+pub struct SequenceFrame {
+    pub time: f32,
+    pub mode: SequenceMode,
+    pub index: i32,
+    pub delay: f32,
+}
+
+#[derive(Clone, Debug)]
+pub struct SequenceTimeline {
+    pub skin: String,
+    pub slot_index: usize,
+    pub attachment: String,
+    pub frames: Vec<SequenceFrame>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AttachmentFrame {
+    pub time: f32,
+    pub name: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AttachmentTimeline {
+    pub slot_index: usize,
+    pub frames: Vec<AttachmentFrame>,
+}
+
+#[derive(Clone, Debug)]
+pub struct DrawOrderFrame {
+    pub time: f32,
+    pub draw_order_to_setup_index: Option<Vec<usize>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct DrawOrderTimeline {
+    pub frames: Vec<DrawOrderFrame>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ColorFrame {
+    pub time: f32,
+    pub color: [f32; 4],
+    pub curve: [Curve; 4],
+}
+
+#[derive(Clone, Debug)]
+pub struct ColorTimeline {
+    pub slot_index: usize,
+    pub frames: Vec<ColorFrame>,
+}
+
+#[derive(Clone, Debug)]
+pub struct RgbFrame {
+    pub time: f32,
+    pub color: [f32; 3],
+    pub curve: [Curve; 3],
+}
+
+#[derive(Clone, Debug)]
+pub struct RgbTimeline {
+    pub slot_index: usize,
+    pub frames: Vec<RgbFrame>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AlphaFrame {
+    pub time: f32,
+    pub alpha: f32,
+    pub curve: Curve,
+}
+
+#[derive(Clone, Debug)]
+pub struct AlphaTimeline {
+    pub slot_index: usize,
+    pub frames: Vec<AlphaFrame>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Rgba2Frame {
+    pub time: f32,
+    pub light: [f32; 4],
+    pub dark: [f32; 3],
+    pub curve: [Curve; 7],
+}
+
+#[derive(Clone, Debug)]
+pub struct Rgba2Timeline {
+    pub slot_index: usize,
+    pub frames: Vec<Rgba2Frame>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Rgb2Frame {
+    pub time: f32,
+    pub light: [f32; 3],
+    pub dark: [f32; 3],
+    pub curve: [Curve; 6],
+}
+
+#[derive(Clone, Debug)]
+pub struct Rgb2Timeline {
+    pub slot_index: usize,
+    pub frames: Vec<Rgb2Frame>,
+}
+
+#[derive(Clone, Debug)]
+pub struct RotateFrame {
+    pub time: f32,
+    pub angle: f32,
+    pub curve: Curve,
+}
+
+#[derive(Clone, Debug)]
+pub struct RotateTimeline {
+    pub bone_index: usize,
+    pub frames: Vec<RotateFrame>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Vec2Frame {
+    pub time: f32,
+    pub x: f32,
+    pub y: f32,
+    pub curve: [Curve; 2],
+}
+
+#[derive(Clone, Debug)]
+pub struct TranslateTimeline {
+    pub bone_index: usize,
+    pub frames: Vec<Vec2Frame>,
+}
+
+#[derive(Clone, Debug)]
+pub struct TranslateXTimeline {
+    pub bone_index: usize,
+    pub frames: Vec<FloatFrame>,
+}
+
+#[derive(Clone, Debug)]
+pub struct TranslateYTimeline {
+    pub bone_index: usize,
+    pub frames: Vec<FloatFrame>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ScaleTimeline {
+    pub bone_index: usize,
+    pub frames: Vec<Vec2Frame>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ScaleXTimeline {
+    pub bone_index: usize,
+    pub frames: Vec<FloatFrame>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ScaleYTimeline {
+    pub bone_index: usize,
+    pub frames: Vec<FloatFrame>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ShearTimeline {
+    pub bone_index: usize,
+    pub frames: Vec<Vec2Frame>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ShearXTimeline {
+    pub bone_index: usize,
+    pub frames: Vec<FloatFrame>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ShearYTimeline {
+    pub bone_index: usize,
+    pub frames: Vec<FloatFrame>,
+}
+
+#[derive(Clone, Debug)]
+pub struct InheritFrame {
+    pub time: f32,
+    pub inherit: Inherit,
+}
+
+#[derive(Clone, Debug)]
+pub struct InheritTimeline {
+    pub bone_index: usize,
+    pub frames: Vec<InheritFrame>,
+}
+
+#[derive(Clone, Debug)]
+pub enum BoneTimeline {
+    Rotate(RotateTimeline),
+    Translate(TranslateTimeline),
+    TranslateX(TranslateXTimeline),
+    TranslateY(TranslateYTimeline),
+    Scale(ScaleTimeline),
+    ScaleX(ScaleXTimeline),
+    ScaleY(ScaleYTimeline),
+    Shear(ShearTimeline),
+    ShearX(ShearXTimeline),
+    ShearY(ShearYTimeline),
+    Inherit(InheritTimeline),
+}
+
+#[derive(Clone, Debug)]
+pub struct Animation {
+    pub name: String,
+    pub duration: f32,
+    pub event_timeline: Option<EventTimeline>,
+    pub bone_timelines: Vec<BoneTimeline>,
+    pub deform_timelines: Vec<DeformTimeline>,
+    pub sequence_timelines: Vec<SequenceTimeline>,
+    pub slot_attachment_timelines: Vec<AttachmentTimeline>,
+    pub slot_color_timelines: Vec<ColorTimeline>,
+    pub slot_rgb_timelines: Vec<RgbTimeline>,
+    pub slot_alpha_timelines: Vec<AlphaTimeline>,
+    pub slot_rgba2_timelines: Vec<Rgba2Timeline>,
+    pub slot_rgb2_timelines: Vec<Rgb2Timeline>,
+    pub ik_constraint_timelines: Vec<IkConstraintTimeline>,
+    pub transform_constraint_timelines: Vec<TransformConstraintTimeline>,
+    pub path_constraint_timelines: Vec<PathConstraintTimeline>,
+    pub physics_constraint_timelines: Vec<PhysicsConstraintTimeline>,
+    pub physics_reset_timelines: Vec<PhysicsConstraintResetTimeline>,
+    pub slider_time_timelines: Vec<SliderConstraintTimeline>,
+    pub slider_mix_timelines: Vec<SliderConstraintTimeline>,
+    pub draw_order_timeline: Option<DrawOrderTimeline>,
+}
+
+#[derive(Clone, Debug)]
+pub struct SkeletonData {
+    pub spine_version: Option<String>,
+    pub reference_scale: f32,
+    pub bones: Vec<BoneData>,
+    pub slots: Vec<SlotData>,
+    pub skins: HashMap<String, SkinData>,
+    pub events: HashMap<String, EventData>,
+    pub animations: Vec<Animation>,
+    pub animation_index: HashMap<String, usize>,
+    pub ik_constraints: Vec<IkConstraintData>,
+    pub transform_constraints: Vec<TransformConstraintData>,
+    pub path_constraints: Vec<PathConstraintData>,
+    pub physics_constraints: Vec<PhysicsConstraintData>,
+    pub slider_constraints: Vec<SliderConstraintData>,
+}
+
+impl SkeletonData {
+    pub fn animation(&self, name: &str) -> Option<(usize, &Animation)> {
+        let index = *self.animation_index.get(name)?;
+        Some((index, &self.animations[index]))
+    }
+
+    pub fn skin(&self, name: &str) -> Option<&SkinData> {
+        self.skins.get(name)
+    }
+}
