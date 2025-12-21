@@ -76,7 +76,7 @@ fn fire(
     let (timeline, _) = make_timeline(frames);
     let timeline_end = frames.iter().copied().fold(0.0f32, |acc, v| acc.max(v));
 
-    let mut fired_events: Vec<Event> = Vec::new();
+    let mut fired_events_count = 0usize;
     let mut i = 0i32;
     let mut last_time = time_start - 0.00001;
     loop {
@@ -90,20 +90,17 @@ fn fire(
             time_looped %= duration;
         }
 
-        let before = fired_events.len();
-        let original = fired_events.clone();
-        fired_events.extend(collect_events_for_tests(
+        let fired = collect_events_for_tests(
             &timeline,
             last_time_looped,
             time_looped,
             looped,
             0.0,
             timeline_end,
-        ));
+        );
 
-        let mut idx = before;
-        while idx < fired_events.len() {
-            let fired = fired_events[idx]
+        for event in fired {
+            let fired = event
                 .string
                 .chars()
                 .next()
@@ -111,7 +108,7 @@ fn fire(
 
             if looped {
                 event_index %= expected_names.len();
-            } else if fired_events.len() > events_count {
+            } else if fired_events_count >= events_count {
                 let _ = collect_events_for_tests(
                     &timeline,
                     last_time_looped,
@@ -120,7 +117,6 @@ fn fire(
                     0.0,
                     timeline_end,
                 );
-                let _ = original;
                 return Err(Fail(format!(
                     "Too many events fired. frames={frames:?} time_start={time_start} time_end={time_end} time_step={time_step} looped={looped}"
                 )));
@@ -135,7 +131,6 @@ fn fire(
                     0.0,
                     timeline_end,
                 );
-                let _ = original;
                 return Err(Fail(format!(
                     "Wrong event fired: got {fired:?}, expected {:?}. frames={frames:?} time_start={time_start} time_end={time_end} time_step={time_step} looped={looped}",
                     expected_names[event_index]
@@ -143,7 +138,7 @@ fn fire(
             }
 
             event_index += 1;
-            idx += 1;
+            fired_events_count += 1;
         }
 
         if time >= time_end {
@@ -153,10 +148,10 @@ fn fire(
         i += 1;
     }
 
-    if fired_events.len() < events_count {
+    if fired_events_count < events_count {
         return Err(Fail(format!(
             "Event not fired (expected at least {events_count}, got {}). frames={frames:?} time_start={time_start} time_end={time_end} time_step={time_step} looped={looped}",
-            fired_events.len()
+            fired_events_count
         )));
     }
     Ok(())
