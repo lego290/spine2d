@@ -120,7 +120,7 @@ struct BoneDef {
     shear_x: f32,
     #[serde(default, rename = "shearY")]
     shear_y: f32,
-    #[serde(default)]
+    #[serde(default, alias = "transform")]
     inherit: Option<String>,
     #[serde(default, rename = "skin")]
     skin_required: bool,
